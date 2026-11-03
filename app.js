@@ -34,7 +34,7 @@ async function loadAll(){if(!family){renderFamily();return}const [m,c,a,t,b]=awa
  client.from('categories').select('*').or(`family_id.eq.${family},family_id.is.null`).order('name'),
  client.from('financial_accounts').select('*').eq('family_id',family).eq('active',true).order('name'),
  client.from('transactions').select('*,categories(name,kind),family_members!transactions_family_member_fkey(display_name),financial_accounts(name)').eq('family_id',family).order('occurred_on',{ascending:false}).limit(500),
- client.from('budgets').select('*,categories(name)').eq('family_id',family).eq('month',month())
+ client.from('budgets').select('*,categories(name)').eq('family_id',family).eq('month',month()+'-01')
  ]);for(const r of [m,c,a,t,b])if(r.error)throw r.error;members=m.data||[];categories=c.data||[];accounts=a.data||[];transactions=t.data||[];budgets=b.data||[];renderAll()}
 function renderAll(){renderDashboard();renderTransactions();renderAccounts();renderBudgets();renderFamily();fillCategories()}
 function monthTx(){return transactions.filter(t=>String(t.occurred_on).slice(0,7)===month())}
