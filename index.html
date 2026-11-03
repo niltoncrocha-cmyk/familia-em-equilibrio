@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#123c2f"><meta name="description" content="Gestão financeira familiar inteligente">
+  <link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <title>Família em Equilíbrio</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="authView" class="auth-wrap">
+    <section class="auth-card">
+      <div class="brand-mark">FE</div><p class="eyebrow">GESTÃO FINANCEIRA FAMILIAR</p>
+      <h1>Família em <span>Equilíbrio</span></h1><p class="muted">Organização, clareza e escolhas melhores.</p>
+      <div id="configNotice" class="notice hidden">Configure a URL e a chave pública do Supabase no arquivo <code>app.js</code> para ativar o acesso.</div>
+      <form id="authForm">
+        <label>E-mail<input id="authEmail" type="email" autocomplete="username" required placeholder="voce@email.com"></label>
+        <label>Senha<input id="authPassword" type="password" autocomplete="current-password" required minlength="6" placeholder="Mínimo de 6 caracteres"></label>
+        <div class="button-row"><button class="primary" type="submit" id="loginBtn">Entrar</button><button class="secondary" type="button" id="signupBtn">Criar acesso</button></div>
+      </form><p id="authMessage" class="form-message" role="status"></p>
+      <p class="tiny muted">Acesso individual. Os dados financeiros ficam vinculados à família autorizada.</p>
+    </section>
+  </div>
+
+  <div id="appView" class="app hidden">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark small">FE</div><div><strong>Família em</strong><br><span>Equilíbrio</span></div></div>
+      <nav id="mainNav">
+        <button class="nav-item active" data-page="dashboard">▦ <span>Visão geral</span></button>
+        <button class="nav-item" data-page="transactions">＋ <span>Lançamentos</span></button>
+        <button class="nav-item" data-page="cards">▤ <span>Contas e cartões</span></button>
+        <button class="nav-item" data-page="budgets">◷ <span>Orçamentos</span></button>
+        <button class="nav-item" data-page="insights">◈ <span>Vilões financeiros</span></button>
+        <button class="nav-item" data-page="family">♧ <span>Família</span></button>
+      </nav>
+      <div class="sidebar-bottom"><span id="sideUser" class="tiny"></span><button id="logoutBtn" class="text-button">Sair da conta ↗</button></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div><p class="eyebrow">SEU PAINEL FINANCEIRO</p><h2 id="pageTitle">Visão geral</h2></div><div class="top-actions"><span class="month-pill" id="monthLabel"></span><button class="primary compact" id="quickAdd">＋ Lançar</button></div></header>
+      <section id="dashboardPage" class="page">
+        <div class="welcome-row"><div><h3>Olá! Vamos cuidar do dinheiro da família.</h3><p class="muted">Acompanhe os resultados e identifique oportunidades de economia.</p></div><div class="goal-chip"><span>Meta de economia</span><strong>20%</strong></div></div>
+        <div class="metric-grid">
+          <article class="metric"><span>Receitas do mês</span><strong id="incomeTotal">R$ 0,00</strong><small>Entradas registradas</small></article>
+          <article class="metric"><span>Despesas do mês</span><strong id="expenseTotal">R$ 0,00</strong><small>Saídas registradas</small></article>
+          <article class="metric"><span>Saldo do mês</span><strong id="balanceTotal">R$ 0,00</strong><small>Receitas menos despesas</small></article>
+          <article class="metric highlight"><span>Despesas variáveis</span><strong id="variableTotal">R$ 0,00</strong><small>Base para a meta de economia</small></article>
+        </div>
+        <div class="content-grid"><article class="panel"><div class="panel-heading"><div><h3>Despesas por categoria</h3><p class="muted">Onde o dinheiro está sendo utilizado</p></div></div><div id="categoryBreakdown" class="breakdown empty-state">Ainda não há lançamentos neste mês.</div></article>
+        <article class="panel"><div class="panel-heading"><div><h3>Últimos lançamentos</h3><p class="muted">Movimentações da família</p></div><button class="text-button" data-goto="transactions">Ver todos</button></div><div id="recentList" class="transaction-list empty-state">Nenhum lançamento registrado.</div></article></div>
+        <article class="panel insight-banner"><div class="spark">✦</div><div><h3>Seu assistente financeiro</h3><p id="assistantSummary">Assim que houver movimentações, mostraremos os principais gastos, variações e oportunidades de economia. A análise por IA será ativada na próxima etapa.</p></div></article>
+      </section>
+
+      <section id="transactionsPage" class="page hidden"><div class="section-head"><div><h3>Movimentações da família</h3><p class="muted">Registre receitas e despesas em poucos segundos.</p></div><button class="primary" id="newTransaction">＋ Novo lançamento</button></div><div class="panel"><div class="filters"><input id="searchTransactions" placeholder="Buscar descrição ou categoria"><select id="typeFilter"><option value="all">Todos os tipos</option><option value="expense">Despesas</option><option value="income">Receitas</option></select></div><div id="transactionsList" class="table-wrap"></div></div></section>
+
+      <section id="cardsPage" class="page hidden"><div class="section-head"><div><h3>Contas e cartões</h3><p class="muted">Cadastre meios de pagamento individuais ou compartilhados.</p></div><button class="primary" id="newAccount">＋ Adicionar</button></div><div id="accountsList" class="account-grid"></div><div class="notice">Nesta primeira versão, os cartões são cadastrados manualmente. A conexão bancária será implementada por provedor Open Finance, mediante autorização dos titulares.</div></section>
+
+      <section id="budgetsPage" class="page hidden"><div class="section-head"><div><h3>Orçamento familiar</h3><p class="muted">Um orçamento comum, com limites por categoria e integrante.</p></div><button class="primary" id="newBudget">＋ Definir limite</button></div><div id="budgetsList" class="budget-list"></div></section>
+
+      <section id="insightsPage" class="page hidden"><div class="section-head"><div><h3>Vilões financeiros</h3><p class="muted">Categorias que mais consomem o orçamento no mês.</p></div></div><div id="insightsContent" class="panel empty-state">Registre despesas para começarmos a identificar os maiores gastos.</div><div class="notice">A classificação de supérfluos por item de nota fiscal, comparação entre supermercados e recomendações com IA entrarão na etapa de leitura inteligente de notas.</div></section>
+
+      <section id="familyPage" class="page hidden"><div class="section-head"><div><h3>Família e acessos</h3><p class="muted">Gerencie os integrantes e seus perfis.</p></div></div><div class="panel"><h3>Seu núcleo familiar</h3><div id="familyInfo" class="family-list"></div><hr><h3>Convidar integrante</h3><p class="muted">Crie o acesso do familiar pelo botão “Criar acesso” na tela inicial. Para associar um novo acesso à família, o administrador deverá enviar um convite (recurso da próxima etapa).</p></div></section>
+    </main>
+  </div>
+
+  <dialog id="transactionDialog" class="modal"><form id="transactionForm" method="dialog"><div class="modal-head"><div><p class="eyebrow">MOVIMENTAÇÃO</p><h2>Novo lançamento</h2></div><button type="button" class="close" data-close="transactionDialog">×</button></div>
+    <div class="form-grid"><label>Tipo<select id="txType"><option value="expense">Despesa</option><option value="income">Receita</option></select></label><label>Valor (R$)<input id="txAmount" type="number" min="0.01" step="0.01" required placeholder="0,00"></label><label class="span-2">Descrição<input id="txDescription" required maxlength="120" placeholder="Ex.: supermercado, salário, combustível"></label><label>Categoria<select id="txCategory"></select></label><label>Data<input id="txDate" type="date" required></label><label>Quem realizou<select id="txMember"></select></label><label>Conta / cartão<select id="txAccount"><option value="">Não informado</option></select></label><label class="span-2">Observação (opcional)<input id="txNotes" maxlength="300" placeholder="Detalhes adicionais"></label></div><div class="modal-actions"><button type="button" class="secondary" data-close="transactionDialog">Cancelar</button><button class="primary" type="submit">Salvar lançamento</button></div><p id="txMessage" class="form-message"></p></form></dialog>
+
+  <dialog id="accountDialog" class="modal"><form id="accountForm" method="dialog"><div class="modal-head"><div><p class="eyebrow">MEIOS DE PAGAMENTO</p><h2>Adicionar conta ou cartão</h2></div><button type="button" class="close" data-close="accountDialog">×</button></div><div class="form-grid"><label>Nome<input id="accountName" required placeholder="Ex.: Cartão principal"></label><label>Tipo<select id="accountType"><option value="credit_card">Cartão de crédito</option><option value="debit_card">Cartão de débito</option><option value="bank_account">Conta bancária</option><option value="cash">Dinheiro</option><option value="pix">Pix</option></select></label><label>Responsável<select id="accountOwner"></select></label><label>Uso<select id="accountScope"><option value="individual">Individual</option><option value="shared">Compartilhado</option></select></label><label>Limite (opcional)<input id="accountLimit" type="number" min="0" step="0.01" placeholder="0,00"></label></div><div class="modal-actions"><button type="button" class="secondary" data-close="accountDialog">Cancelar</button><button class="primary" type="submit">Salvar</button></div><p id="accountMessage" class="form-message"></p></form></dialog>
+
+  <dialog id="budgetDialog" class="modal"><form id="budgetForm" method="dialog"><div class="modal-head"><div><p class="eyebrow">PLANEJAMENTO</p><h2>Definir limite mensal</h2></div><button type="button" class="close" data-close="budgetDialog">×</button></div><div class="form-grid"><label>Categoria<select id="budgetCategory"></select></label><label>Limite (R$)<input id="budgetAmount" type="number" min="0.01" step="0.01" required></label><label>Responsável<select id="budgetMember"><option value="">Família inteira</option></select></label><label>Mês<input id="budgetMonth" type="month" required></label></div><div class="modal-actions"><button type="button" class="secondary" data-close="budgetDialog">Cancelar</button><button class="primary" type="submit">Salvar limite</button></div><p id="budgetMessage" class="form-message"></p></form></dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="app.js"></script>
+</body></html>
