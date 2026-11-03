@@ -2,8 +2,8 @@
  * Configure SUPABASE_URL e SUPABASE_ANON_KEY após criar o projeto Supabase.
  * Nunca coloque service_role key neste arquivo.
  */
-const SUPABASE_URL = 'COLE_AQUI_A_URL_DO_SUPABASE';
-const SUPABASE_ANON_KEY = 'COLE_AQUI_A_CHAVE_ANON_PUBLICA';
+const SUPABASE_URL = 'https://tyorbdvljblcctofbmoz.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_ZvcNb-7G4TqCmLxqZTE04Q_9jgMShVM';
 const configured = SUPABASE_URL.startsWith('https://') && !SUPABASE_URL.includes('COLE_AQUI') && !SUPABASE_ANON_KEY.includes('COLE_AQUI');
 const $ = id => document.getElementById(id);
 const money = n => new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Number(n)||0);
