@@ -10,7 +10,7 @@ const money = n => new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL
 const today = () => new Date().toISOString().slice(0,10);
 const month = () => today().slice(0,7);
 const monthName = new Intl.DateTimeFormat('pt-BR',{month:'long',year:'numeric'}).format(new Date());
-let client=null, session=null, family=null, members=[], categories=[], accounts=[], transactions=[], budgets=[];
+let client=null, session=null, family=null, members=[], categories=[], accounts=[], transactions=[], budgets=[], connections=[], reviews=[];
 const fallbackCategories = [
  ['Moradia','expense','fixed'],['Alimentação','expense','variable'],['Supermercado','expense','variable'],['Restaurantes e delivery','expense','variable'],['Transporte e combustível','expense','variable'],['Saúde e farmácia','expense','variable'],['Educação','expense','fixed'],['Lazer','expense','variable'],['Vestuário','expense','variable'],['Assinaturas','expense','fixed'],['Contas da casa','expense','fixed'],['Impostos e taxas','expense','fixed'],['Outros gastos','expense','variable'],['Salário','income','income'],['Renda extra','income','income'],['Investimentos e rendimentos','income','income'],['Outras receitas','income','income']
 ];
@@ -29,14 +29,16 @@ $('authForm').addEventListener('submit',async e=>{e.preventDefault();if(!configu
 $('signupBtn').onclick=async()=>{if(!configured){message('authMessage','Configure primeiro a URL e a chave pública do Supabase no app.js.');return}const {data,error}=await client.auth.signUp({email:$('authEmail').value,password:$('authPassword').value});if(error){message('authMessage',error.message);return}message('authMessage',data.session?'Acesso criado. Entre para continuar.':'Acesse seu e-mail para confirmar o cadastro e depois entre.');};
 async function boot(){showApp();$('sideUser').textContent=session.user.email;try{await loadFamily();await loadAll()}catch(e){toast('Não foi possível carregar os dados: '+e.message)}}
 async function loadFamily(){let {data,error}=await client.from('family_members').select('family_id,role,display_name').eq('user_id',session.user.id).eq('active',true).maybeSingle();if(error)throw error;if(!data){$('familyInfo').innerHTML='<p class="muted">Seu usuário ainda não está vinculado a uma família. Execute a função de configuração inicial descrita no README ou peça ao administrador para concluir o cadastro.</p>';return}family=data.family_id;}
-async function loadAll(){if(!family){renderFamily();return}const [m,c,a,t,b]=await Promise.all([
+async function loadAll(){if(!family){renderFamily();return}const [m,c,a,t,b,cn,rv]=await Promise.all([
  client.from('family_members').select('user_id,display_name,role').eq('family_id',family).eq('active',true),
  client.from('categories').select('*').or(`family_id.eq.${family},family_id.is.null`).order('name'),
  client.from('financial_accounts').select('*').eq('family_id',family).eq('active',true).order('name'),
  client.from('transactions').select('*,categories!transactions_category_id_fkey(name,kind),family_members!transactions_family_member_fkey(display_name),financial_accounts!transactions_account_id_fkey(name)').eq('family_id',family).order('occurred_on',{ascending:false}).limit(500),
- client.from('budgets').select('*,categories(name)').eq('family_id',family).eq('month',month()+'-01')
- ]);for(const r of [m,c,a,t,b])if(r.error)throw r.error;members=m.data||[];categories=c.data||[];accounts=a.data||[];transactions=t.data||[];budgets=b.data||[];renderAll()}
-function renderAll(){renderDashboard();renderTransactions();renderAccounts();renderBudgets();renderFamily();fillCategories()}
+ client.from('budgets').select('*,categories(name)').eq('family_id',family).eq('month',month()+'-01'),
+ client.from('bank_connections').select('id,institution,last_synced_at').eq('family_id',family).order('created_at'),
+ client.from('bank_import_review').select('*').eq('family_id',family).eq('review_status','pending').order('transaction_date',{ascending:false}).limit(200)
+ ]);for(const r of [m,c,a,t,b])if(r.error)throw r.error;members=m.data||[];categories=c.data||[];accounts=a.data||[];transactions=t.data||[];budgets=b.data||[];connections=cn.error?[]:(cn.data||[]);reviews=rv.error?[]:(rv.data||[]);renderAll()}
+function renderAll(){renderDashboard();renderTransactions();renderAccounts();renderBudgets();renderFamily();fillCategories();renderBank()}
 function monthTx(){return transactions.filter(t=>String(t.occurred_on).slice(0,7)===month())}
 function renderDashboard(){const ts=monthTx(),income=ts.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.amount),0),expense=ts.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.amount),0),variable=ts.filter(t=>t.type==='expense'&&t.cost_behavior!=='fixed').reduce((s,t)=>s+Number(t.amount),0);$('incomeTotal').textContent=money(income);$('expenseTotal').textContent=money(expense);$('balanceTotal').textContent=money(income-expense);$('balanceTotal').className=income-expense>=0?'positive':'negative';$('variableTotal').textContent=money(variable);
  const groups={};ts.filter(t=>t.type==='expense').forEach(t=>{let n=t.categories?.name||'Sem categoria';groups[n]=(groups[n]||0)+Number(t.amount)});const sorted=Object.entries(groups).sort((a,b)=>b[1]-a[1]);$('categoryBreakdown').innerHTML=sorted.length?sorted.slice(0,7).map(([n,v])=>`<div class="bar-row"><span>${esc(n)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(2,v/Math.max(...sorted.map(x=>x[1]))*100)}%"></div></div><strong>${money(v)}</strong></div>`).join(''):'Ainda não há lançamentos neste mês.';
@@ -59,5 +61,33 @@ $('searchTransactions').oninput=renderTransactions;$('typeFilter').onchange=rend
 function memberName(id){return members.find(m=>m.user_id===id)?.display_name||'Integrante'}
 function formatDate(d){return new Intl.DateTimeFormat('pt-BR').format(new Date(d+'T12:00:00'))}
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+/* ---- Conexão bancária (MeuPluggy / Pluggy) ---- */
+function accountName(id){return accounts.find(a=>a.id===id)?.name||'Conta importada'}
+function catOptions(type){return categories.filter(c=>c.kind===(type==='income'?'income':'expense')).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}
+function renderBank(){
+  const list=$('connectionsList');if(!list)return;
+  list.innerHTML=connections.length?connections.map(c=>`<div class="tx-row"><div><strong>${esc(c.institution||'Banco conectado')}</strong><small>${c.last_synced_at?'Última sincronização: '+esc(new Date(c.last_synced_at).toLocaleString('pt-BR')):'Ainda não sincronizado'}</small></div></div>`).join(''):'<p class="muted">Nenhum banco conectado ainda.</p>';
+  $('syncBank').disabled=!connections.length;
+  $('reviewList').innerHTML=reviews.length?reviews.map(r=>{const type=r.suggested_type||'expense';return `<div class="tx-row" data-review="${r.id}" style="flex-wrap:wrap;gap:8px"><div><strong>${esc(r.description)}</strong><small>${formatDate(r.transaction_date)} · ${esc(accountName(r.account_id))}</small></div><strong class="${type==='income'?'positive':'negative'}">${money(r.amount)}</strong><div class="button-row" style="width:100%"><select class="rv-type"><option value="expense"${type==='expense'?' selected':''}>Despesa</option><option value="income"${type==='income'?' selected':''}>Receita</option></select><select class="rv-cat">${catOptions(type)}</select><button class="primary compact" type="button" data-act="approve">Aprovar</button><button class="secondary compact" type="button" data-act="reject">Ignorar</button></div></div>`}).join(''):'<div class="empty-state">Nenhum lançamento aguardando revisão.</div>';
+}
+async function approveReview(row){
+  const r=reviews.find(x=>x.id===row.dataset.review);if(!r)return;
+  const type=row.querySelector('.rv-type').value,catId=row.querySelector('.rv-cat').value,category=categories.find(c=>c.id===catId);
+  const {error}=await client.from('transactions').insert({family_id:family,type,amount:Number(r.amount),description:r.description,category_id:catId||null,occurred_on:r.transaction_date,member_user_id:session.user.id,account_id:r.account_id,cost_behavior:category?.cost_behavior||(type==='income'?'income':'variable'),source:'bank_import',external_transaction_id:r.external_transaction_id,created_by:session.user.id});
+  if(error)throw error;
+  const {error:e2}=await client.from('bank_import_review').update({review_status:'approved',final_type:type,final_category_id:catId||null,reviewed_by:session.user.id,reviewed_at:new Date().toISOString()}).eq('id',r.id);
+  if(e2)throw e2;
+  await loadAll();toast('Lançamento aprovado.');
+}
+async function rejectReview(row){
+  const {error}=await client.from('bank_import_review').update({review_status:'rejected',reviewed_by:session.user.id,reviewed_at:new Date().toISOString()}).eq('id',row.dataset.review);
+  if(error)throw error;
+  await loadAll();toast('Lançamento ignorado.');
+}
+$('reviewList').addEventListener('click',async e=>{const b=e.target.closest('button[data-act]');if(!b)return;const row=b.closest('[data-review]');b.disabled=true;try{await(b.dataset.act==='approve'?approveReview(row):rejectReview(row))}catch(err){toast(err.message);b.disabled=false}});
+$('reviewList').addEventListener('change',e=>{if(e.target.classList.contains('rv-type'))e.target.closest('[data-review]').querySelector('.rv-cat').innerHTML=catOptions(e.target.value)});
+$('connectBank').onclick=()=>{$('itemId').value='';$('itemName').value='';message('connectMessage','');openDialog('connectDialog')};
+$('connectForm').onsubmit=async e=>{e.preventDefault();try{const item=$('itemId').value.trim();if(!/^[0-9a-f-]{36}$/i.test(item))throw new Error('Item ID inválido. Copie o código novamente no app de demonstração da Pluggy.');const {error}=await client.from('bank_connections').insert({family_id:family,provider:'pluggy',item_id:item,institution:$('itemName').value.trim()||null,created_by:session.user.id});if(error)throw error;closeDialog('connectDialog');await loadAll();toast('Banco conectado. Toque em Sincronizar agora.')}catch(err){message('connectMessage',err.message)}};
+$('syncBank').onclick=async()=>{const btn=$('syncBank');btn.disabled=true;btn.textContent='Sincronizando…';try{const {data,error}=await client.functions.invoke('pluggy-sync');if(error){let msg=error.message;try{const j=await error.context.json();msg=j.error||msg}catch(_){}throw new Error(msg)}await loadAll();toast(`Sincronizado: ${data.new_transactions} novos lançamentos para revisar.`)}catch(err){toast(err.message)}finally{btn.textContent='Sincronizar agora';btn.disabled=!connections.length}};
 if(configured&&window.supabase){client=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);client.auth.getSession().then(({data})=>{if(data.session){session=data.session;boot()}else showAuth()});client.auth.onAuthStateChange((_event,s)=>{if(s){session=s;boot()}else showAuth()})}else showAuth();
 if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
