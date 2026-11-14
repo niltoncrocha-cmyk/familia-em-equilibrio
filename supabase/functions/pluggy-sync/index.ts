@@ -19,15 +19,20 @@ const dayOf = (iso) => (iso ? Number(String(iso).slice(8, 10)) || null : null);
 const chunk = (arr, n) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
 
 async function pluggyKey() {
-  const clientId = Deno.env.get('PLUGGY_CLIENT_ID');
-  const clientSecret = Deno.env.get('PLUGGY_CLIENT_SECRET');
+  // trim(): ao colar pelo celular costuma sobrar espaço ou quebra de linha no fim do valor.
+  const clientId = (Deno.env.get('PLUGGY_CLIENT_ID') ?? '').trim();
+  const clientSecret = (Deno.env.get('PLUGGY_CLIENT_SECRET') ?? '').trim();
   if (!clientId || !clientSecret) throw new Error('Credenciais da Pluggy não configuradas no Supabase.');
   const r = await fetch(`${PLUGGY}/auth`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ clientId, clientSecret }),
   });
-  if (!r.ok) throw new Error(`Falha ao autenticar na Pluggy (${r.status}). Confira as credenciais.`);
+  if (!r.ok) {
+    // Só informa tamanho e formato (nunca os valores) para ajudar a achar o erro de colagem.
+    const idFormat = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clientId) ? 'formato correto' : 'formato diferente de um UUID';
+    throw new Error(`Falha ao autenticar na Pluggy (${r.status}). Client ID: ${clientId.length} caracteres (${idFormat}); Client Secret: ${clientSecret.length} caracteres. Confira se os dois foram copiados inteiros e nos campos certos.`);
+  }
   return (await r.json()).apiKey;
 }
 
@@ -61,8 +66,10 @@ Deno.serve(async (req) => {
 
     const key = await pluggyKey();
     let newAccounts = 0, newTransactions = 0;
+    const errors = [];
 
     for (const c of conns) {
+      try {
       const accData = await pluggyGet(`/accounts?itemId=${encodeURIComponent(c.item_id)}`, key);
       const list = accData.results ?? [];
       const extIds = list.map((a) => a.id);
@@ -152,9 +159,13 @@ Deno.serve(async (req) => {
       await sb.from('bank_connections')
         .update({ last_synced_at: new Date().toISOString(), institution })
         .eq('id', c.id);
+      } catch (e) {
+        // Um banco com problema não impede a sincronização dos demais.
+        errors.push(`${c.institution || 'Banco'}: ${e?.message || 'erro desconhecido'}`);
+      }
     }
 
-    return json({ accounts: newAccounts, new_transactions: newTransactions });
+    return json({ accounts: newAccounts, new_transactions: newTransactions, errors });
   } catch (err) {
     return json({ error: err?.message || 'Erro inesperado na sincronização.' }, 500);
   }
