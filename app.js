@@ -89,19 +89,27 @@ function suggestFor(r){const m=learn();const w=words(r.description);
     return {cat:c?c[0]:null,kind:k?k[0]:'normal',count:e.n}}
   return null}
 // Aviso de duplicidade: lançamento manual (ou de nota) com mesmo valor e data próxima (até 2 dias).
+// Reconhecimento pelo texto da descrição (vale também para itens que já estavam na fila e têm prioridade sobre o histórico).
+function autoKind(r){const n=String(r.description||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  if(/(pagamento|pgto|pag)\s*(de\s*)?fatura|fatura\s*(do\s*)?cart|pagamento recebido|pagamento efetuado/.test(n))return 'card_bill';
+  if(/rend\w*[\s.]*facil|aplicacao\s*automatica|resgate\s*automatico|aplic\w*\s*(em\s*|de\s*)?(auto|invest|cdb|fundo|poupanca)|resg\w*\s*(em\s*|de\s*)?(auto|invest|cdb|fundo|poupanca)|\b(apl|resg)\.?\s*aut/.test(n))return 'investment';
+  if(/doacao|dizimo|oferta/.test(n))return 'donation';
+  return null}
 function dupOf(r){const t=r.suggested_type||'expense';return history.find(h=>h.source!=='bank_import'&&h.type===t&&Number(h.amount)===Number(r.amount)&&Math.abs(new Date(h.occurred_on)-new Date(r.transaction_date))<=2*864e5)}
 function renderBank(){
   const list=$('connectionsList');if(!list)return;
   list.innerHTML=connections.length?connections.map(c=>`<div class="tx-row"><div><strong>${esc(c.institution||'Banco conectado')}</strong><small>${c.last_synced_at?'Última sincronização: '+esc(new Date(c.last_synced_at).toLocaleString('pt-BR')):'Ainda não sincronizado'}</small></div></div>`).join(''):'<p class="muted">Nenhum banco conectado ainda.</p>';
   $('syncBank').disabled=!connections.length;
   const rf=$('reviewFilter')?$('reviewFilter').value:'all';
-  const info=r=>{const type=r.suggested_type||'expense',sug=suggestFor(r),dup=dupOf(r);const kind=r.suggested_movement||(sug&&sug.kind)||'normal';const catOk=sug&&sug.cat&&categories.some(c=>c.id===sug.cat&&c.kind===(type==='income'?'income':'expense'))?sug.cat:null;return {type,sug,dup,kind,catOk,has:!!(catOk||kind!=='normal')}};
+  const info=r=>{const type=r.suggested_type||'expense',sug=suggestFor(r),dup=dupOf(r);const ak=r.suggested_movement?null:autoKind(r);const kind=r.suggested_movement||ak||(sug&&sug.kind)||'normal';const catOk=sug&&sug.cat&&categories.some(c=>c.id===sug.cat&&c.kind===(type==='income'?'income':'expense'))?sug.cat:null;return {type,sug,dup,kind,catOk,ak,has:!!(catOk||kind!=='normal')}};
   const shown=reviews.map(r=>({r,i:info(r)})).filter(({i})=>rf==='all'||((rf==='expense'||rf==='income')?i.type===rf:rf==='suggested'?i.has:rf==='nosuggest'?!i.has:rf==='dup'?!!i.dup:i.kind===rf));
-  $('reviewList').innerHTML=shown.length?shown.map(({r,i})=>{const {type,sug,dup,kind,catOk}=i;
+  $('reviewList').innerHTML=shown.length?shown.map(({r,i})=>{const {type,sug,dup,kind,catOk,ak}=i;
     return `<div class="tx-row" data-review="${r.id}" style="flex-wrap:wrap;gap:8px${dup?';border-left:3px solid #c5a45b;padding-left:8px':''}"><div><strong>${esc(r.description)}</strong><small>${formatDate(r.transaction_date)} · ${esc(accountName(r.account_id))}${r.payment_method?' · '+esc(PM[r.payment_method]||r.payment_method):''}${r.counterparty?' · '+esc(r.counterparty):''}</small></div><strong class="${type==='income'?'positive':'negative'}">${money(r.amount)}</strong>
       ${dup?`<div class="notice" style="width:100%;margin:0">⚠ Possível duplicado: já existe “${esc(dup.description)}” de ${money(dup.amount)} em ${formatDate(dup.occurred_on)}, lançado por você. Se for a mesma despesa, toque em <strong>Ignorar</strong>.</div>`:''}
-      ${sug&&(catOk||kind!=='normal')&&!r.suggested_movement?`<small class="muted" style="width:100%">Sugerido pelo histórico (${sug.count} lançamento${sug.count>1?'s':''} parecido${sug.count>1?'s':''}).</small>`:''}
+      ${ak?`<small class="muted" style="width:100%">Reconhecido pelo texto da descrição: ${esc(KIND[ak])}.</small>`:''}${sug&&!ak&&(catOk||kind!=='normal')&&!r.suggested_movement?`<small class="muted" style="width:100%">Sugerido pelo histórico (${sug.count} lançamento${sug.count>1?'s':''} parecido${sug.count>1?'s':''}).</small>`:''}
       <div class="button-row" style="width:100%"><select class="rv-type"><option value="expense"${type==='expense'?' selected':''}>Despesa</option><option value="income"${type==='income'?' selected':''}>Receita</option></select><select class="rv-kind">${Object.entries(KIND).map(([k,v])=>`<option value="${k}"${kind===k?' selected':''}>${v}</option>`).join('')}</select><select class="rv-cat"${kind!=='normal'?' style="display:none"':''}>${catOptions(type,catOk)}</select><button class="primary compact" type="button" data-act="approve">Aprovar</button><button class="secondary compact" type="button" data-act="reject">Ignorar</button></div></div>`}).join(''):`<div class="empty-state">${reviews.length?'Nenhum lançamento neste filtro.':'Nenhum lançamento aguardando revisão.'}</div>`;
+  const inv=reviews.filter(r=>(r.suggested_movement||autoKind(r))==='investment');const bb=$('approveInvest');
+  if(bb){bb.classList.toggle('hidden',!inv.length);bb.textContent=`Aprovar aplicações e resgates (${inv.length})`}
 }
 async function approveReview(row){
   const r=reviews.find(x=>x.id===row.dataset.review);if(!r)return;
@@ -174,7 +182,7 @@ $('catForm').onsubmit=async e=>{e.preventDefault();try{
 // Varredura: reaplica o aprendizado do histórico em todos os itens pendentes e resume o resultado.
 $('reviewFilter').onchange=renderBank;
 $('scanReview').onclick=()=>{learnMap=null;renderBank();
-  let has=0,dups=0;for(const r of reviews){const type=r.suggested_type||'expense',sug=suggestFor(r);const ok=r.suggested_movement||(sug&&((sug.cat&&categories.some(c=>c.id===sug.cat&&c.kind===(type==='income'?'income':'expense')))||sug.kind!=='normal'));if(ok)has++;if(dupOf(r))dups++}
+  let has=0,dups=0;for(const r of reviews){const type=r.suggested_type||'expense',sug=suggestFor(r);const ok=r.suggested_movement||autoKind(r)||(sug&&((sug.cat&&categories.some(c=>c.id===sug.cat&&c.kind===(type==='income'?'income':'expense')))||sug.kind!=='normal'));if(ok)has++;if(dupOf(r))dups++}
   $('scanResult').textContent=reviews.length?`Varredura concluída: ${has} de ${reviews.length} itens já vieram classificados pelo histórico (${reviews.length-has} precisam da sua classificação) e ${dups} possível(is) duplicado(s). Revise e toque em Aprovar.`:'Nenhum item aguardando revisão.';}
 
 // Aba Investimentos: carteira importada das contas conectadas + visão de contas e cartões.
@@ -192,3 +200,13 @@ function renderInvestments(){const box=$('investmentsContent');if(!box)return;
     return `<article class="panel"><div class="panel-heading"><div><h3>${esc(INV_TYPE[k]||k)}</h3><p class="muted">${money(sub)}${total?` · ${Math.round(sub/total*100)}% da carteira`:''}</p></div></div>${list.map(i=>`<div class="tx-row"><div><strong>${esc(i.name)}</strong><small>${esc([i.institution,i.issuer&&i.issuer!==i.institution?i.issuer:null,i.annual_rate!=null?Number(i.annual_rate).toLocaleString('pt-BR',{maximumFractionDigits:2})+'% a.a.':null,i.due_date?'vence '+formatDate(i.due_date):null].filter(Boolean).join(' · '))}</small></div><strong>${money(i.balance)}</strong></div>`).join('')}</article>`}).join('');
   html+=`<p class="tiny muted">Atualizado em ${last?new Date(last).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'}. Os valores vêm do banco via Open Finance; não entram nas receitas e despesas.</p>`;
   box.innerHTML=html}
+
+// Aprova de uma vez as aplicações/resgates de investimento (ex.: Rende Fácil), sem contar como receita ou despesa.
+$('approveInvest').onclick=async()=>{const inv=reviews.filter(r=>(r.suggested_movement||autoKind(r))==='investment');if(!inv.length)return;
+  const total=inv.reduce((s,r)=>s+Number(r.amount),0);
+  if(!confirm(`Aprovar ${inv.length} lançamento(s) (soma de ${money(total)}) como aplicação/resgate de investimento? Eles não contam como receita nem despesa.`))return;
+  const b=$('approveInvest');b.disabled=true;try{
+    const rows=inv.map(r=>({family_id:family,type:r.suggested_type||'expense',amount:Number(r.amount),description:r.description,category_id:null,occurred_on:r.transaction_date,member_user_id:session.user.id,account_id:r.account_id,cost_behavior:(r.suggested_type==='income')?'income':'variable',source:'bank_import',movement_kind:'investment',payment_method:r.payment_method||null,counterparty:r.counterparty||null,external_transaction_id:r.external_transaction_id,created_by:session.user.id}));
+    const {error}=await client.from('transactions').insert(rows);if(error)throw error;
+    const {error:e2}=await client.from('bank_import_review').update({review_status:'approved',final_movement:'investment',reviewed_by:session.user.id,reviewed_at:new Date().toISOString()}).in('id',inv.map(r=>r.id));if(e2)throw e2;
+    await loadAll();toast(`${inv.length} lançamento(s) aprovados como investimento.`)}catch(err){toast(err.message)}finally{b.disabled=false}};
