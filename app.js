@@ -38,7 +38,7 @@ async function loadAll(){if(!family){renderFamily();return}const [m,c,a,t,b,cn,r
  client.from('bank_connections').select('id,institution,last_synced_at').eq('family_id',family).order('created_at'),
  client.from('bank_import_review').select('*').eq('family_id',family).eq('review_status','pending').order('transaction_date',{ascending:false}).limit(200),
  client.from('family_aliases').select('id,name').eq('family_id',family).order('name'),
- client.from('transactions').select('description,counterparty,amount,type,category_id,movement_kind,occurred_on,source').eq('family_id',family).order('occurred_on',{ascending:false}).limit(3000),
+ client.from('transactions').select('id,account_id,description,counterparty,amount,type,category_id,movement_kind,occurred_on,source').eq('family_id',family).order('occurred_on',{ascending:false}).limit(3000),
  client.from('investments').select('*').eq('family_id',family).order('balance',{ascending:false})
  ]);for(const r of [m,c,a,t,b])if(r.error)throw r.error;members=m.data||[];categories=c.data||[];accounts=a.data||[];transactions=t.data||[];budgets=b.data||[];connections=cn.error?[]:(cn.data||[]);reviews=rv.error?[]:(rv.data||[]);aliases=al.error?[]:(al.data||[]);history=hs.error?[]:(hs.data||[]);investments=iv.error?[]:(iv.data||[]);renderAll()}
 function renderAll(){renderMonths();renderWealth();renderInvestments();renderAliases();renderDashboard();renderTransactions();renderAccounts();renderBudgets();renderFamily();fillCategories();renderBank()}
@@ -93,6 +93,8 @@ function suggestFor(r){const m=learn();const w=words(r.description);
 function autoKind(r){const n=String(r.description||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
   if(/(pagamento|pgto|pag)\s*(de\s*)?fatura|fatura\s*(do\s*)?cart|pagamento recebido|pagamento efetuado/.test(n))return 'card_bill';
   if(/rend\w*[\s.]*facil|aplicacao\s*automatica|resgate\s*automatico|aplic\w*\s*(em\s*|de\s*)?(auto|invest|cdb|fundo|poupanca)|resg\w*\s*(em\s*|de\s*)?(auto|invest|cdb|fundo|poupanca)|\b(apl|resg)\.?\s*aut/.test(n))return 'investment';
+  if(/(resgate|aplicacao)\s*(rdb|cdb|lci|lca|poupanca|fundo)|rdb/.test(n))return 'investment';
+  if(/gastos\s*cartao\s*de\s*credito|pagto\.?\s*por\s*deb|pgto\s*cartao/.test(n))return 'card_bill';
   if(/doacao|dizimo|oferta/.test(n))return 'donation';
   return null}
 function dupOf(r){const t=r.suggested_type||'expense';return history.find(h=>h.source!=='bank_import'&&h.type===t&&Number(h.amount)===Number(r.amount)&&Math.abs(new Date(h.occurred_on)-new Date(r.transaction_date))<=2*864e5)}
@@ -134,7 +136,7 @@ $('syncBank').onclick=async()=>{const btn=$('syncBank');btn.disabled=true;btn.te
   $('syncResult').textContent=[`Última sincronização às ${when}: ${data.new_transactions} novos lançamentos para revisar; a Pluggy devolveu ${data.fetched_transactions} lançamentos em ${data.checked_accounts} contas.`,...(data.errors||[]).map(x=>'⚠ '+x),...(data.details||[]).map(x=>'• '+x)].join('\n');
   toast(`Sincronizado: ${data.new_transactions} novos lançamentos para revisar.`+(data.errors?.length?' Há avisos abaixo.':''))}catch(err){$('syncResult').textContent='⚠ '+err.message;toast(err.message)}finally{btn.textContent='Sincronizar agora';btn.disabled=!connections.length}};
 if(configured&&window.supabase){client=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);client.auth.getSession().then(({data})=>{if(data.session){session=data.session;boot()}else showAuth()});client.auth.onAuthStateChange((_event,s)=>{if(s){session=s;boot()}else showAuth()})}else showAuth();
-const APP_VERSION='17';
+const APP_VERSION='18';
 if('serviceWorker'in navigator){const hadController=!!navigator.serviceWorker.controller;let reloaded=false;
   navigator.serviceWorker.addEventListener('controllerchange',()=>{if(hadController&&!reloaded){reloaded=true;location.reload()}});
   window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(r=>r.update()).catch(()=>{}))}
@@ -273,3 +275,33 @@ function renderMonths(){const box=$('monthsContent');if(!box)return;
   <p class="tiny muted">Não entram: transferências entre contas da família, pagamentos de fatura e aplicações/resgates. Doações contam como despesa.${history.length>=3000?' O histórico considera os últimos 3.000 lançamentos.':''}</p>`}
 $('monthsContent').addEventListener('click',e=>{const b=e.target.closest('[data-m]');if(!b||b.disabled)return;monthsSel=b.dataset.m;renderMonths();window.scrollTo({top:0})});
 $('monthsContent').addEventListener('change',e=>{if(e.target.id==='monthsPick'&&e.target.value){monthsSel=e.target.value;renderMonths()}});
+
+// Conciliação: procura lançamentos possivelmente duplicados e movimentações internas contadas como receita/despesa.
+const RECON_KEY='recon_dismissed';let reconOpen=false;
+const reconDismissed=()=>{try{return new Set(JSON.parse(localStorage.getItem(RECON_KEY)||'[]'))}catch(e){return new Set()}};
+const reconDismiss=k=>{try{const s=reconDismissed();s.add(k);localStorage.setItem(RECON_KEY,JSON.stringify([...s]))}catch(e){}};
+const dnorm=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\d+/g,'').replace(/[^a-z]+/g,' ').trim().slice(0,22);
+function reconFind(){const out=[],dis=reconDismissed(),days=(x,y)=>Math.abs((new Date(x)-new Date(y))/864e5);
+  const counted=history.filter(t=>['normal','donation'].includes(t.movement_kind||'normal'));
+  for(const t of history){if((t.movement_kind||'normal')!=='normal')continue;const k=autoKind(t);if(k&&!dis.has('k'+t.id))out.push({key:'k'+t.id,kind:'fix',t,to:k})}
+  const seen=new Set();
+  for(let i=0;i<counted.length;i++)for(let j=i+1;j<counted.length;j++){const x=counted[i],y=counted[j];
+    if(x.type!==y.type||Number(x.amount)!==Number(y.amount)||x.account_id!==y.account_id||days(x.occurred_on,y.occurred_on)>1)continue;
+    if(dnorm(x.description)!==dnorm(y.description))continue;
+    const key='d'+[x.id,y.id].sort().join('-');if(dis.has(key)||seen.has(key))continue;seen.add(key);out.push({key,kind:'dup',a:x,b:y})}
+  const bills=history.filter(t=>t.movement_kind==='card_bill'&&t.type==='expense');
+  for(const t of counted){if(t.type!=='expense'||Number(t.amount)<30)continue;const b=bills.find(x=>Number(x.amount)===Number(t.amount)&&days(x.occurred_on,t.occurred_on)<=3&&x.id!==t.id);
+    const key='b'+t.id;if(b&&!dis.has(key))out.push({key,kind:'bill',t,b})}
+  return out}
+function renderRecon(){const box=$('reconBox');if(!box)return;if(!reconOpen){box.innerHTML='';return}
+  const items=reconFind(),line=t=>`<strong>${esc(t.description)}</strong> · ${formatDate(t.occurred_on)} · ${t.type==='income'?'+':'−'} ${money(t.amount)}`;
+  const card=(it)=>{const dis=`<button class="secondary compact" data-rd="${it.key}">Não é problema</button>`;
+    if(it.kind==='fix')return `<div class="tx-row"><div>${line(it.t)}<small>Parece ${esc(KIND[it.to]||it.to)}, mas está contando como receita/despesa.</small></div><div class="button-row"><button class="primary compact" data-rf="${it.t.id}" data-to="${it.to}">Corrigir</button>${dis}</div></div>`;
+    if(it.kind==='dup')return `<div class="tx-row"><div>${line(it.a)}<small>Parecida com: ${line(it.b)}<br>Pode ser repetida ou ser dois pagamentos reais (ex.: pedágio).</small></div><div class="button-row"><button class="secondary compact" data-rx="${it.b.id}">Excluir a segunda</button>${dis}</div></div>`;
+    return `<div class="tx-row"><div>${line(it.t)}<small>Mesmo valor de uma fatura paga em ${formatDate(it.b.occurred_on)} (${esc(it.b.description)}). Pode estar contada duas vezes.</small></div><div class="button-row">${dis}</div></div>`};
+  box.innerHTML=`<article class="panel"><div class="panel-heading"><div><h3>Conciliação</h3><p class="muted">${items.length?items.length+' ponto(s) para conferir.':'Nenhuma duplicidade encontrada.'} Analisa os últimos ${history.length} lançamentos.</p></div></div>${items.map(card).join('')}</article>`}
+document.addEventListener('click',async e=>{const b=e.target.closest('#reconBtn,[data-rd],[data-rf],[data-rx]');if(!b)return;
+  if(b.id==='reconBtn'){reconOpen=!reconOpen;renderRecon();return}
+  if(b.dataset.rd){reconDismiss(b.dataset.rd);renderRecon();return}
+  if(b.dataset.rf){const{error}=await client.from('transactions').update({movement_kind:b.dataset.to}).eq('id',b.dataset.rf);if(error)return toast('Não foi possível corrigir: '+error.message);toast('Corrigido.');await loadAll();renderRecon();return}
+  if(b.dataset.rx){if(!confirm('Excluir este lançamento? Isso não pode ser desfeito.'))return;const{error}=await client.from('transactions').delete().eq('id',b.dataset.rx);if(error)return toast('Não foi possível excluir: '+error.message);toast('Excluído.');await loadAll();renderRecon()}});
