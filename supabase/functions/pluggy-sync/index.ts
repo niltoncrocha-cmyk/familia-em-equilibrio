@@ -38,7 +38,12 @@ async function pluggyKey() {
 
 async function pluggyGet(path, key) {
   const r = await fetch(PLUGGY + path, { headers: { 'X-API-KEY': key } });
-  if (!r.ok) throw new Error(`A Pluggy respondeu ${r.status} em ${path.split('?')[0]}.`);
+  if (!r.ok) {
+    // Inclui o motivo informado pela Pluggy (sem dados pessoais) para facilitar o diagnóstico.
+    let why = '';
+    try { const j = await r.json(); why = String(j?.message || j?.code || '').slice(0, 160); } catch (_) { /* sem corpo */ }
+    throw new Error(`A Pluggy respondeu ${r.status} em ${path.split('?')[0]}${why ? ': ' + why : '.'}`);
+  }
   return r.json();
 }
 
