@@ -95,6 +95,8 @@ Deno.serve(async (req) => {
         owner_name: fm.display_name,
         scope: 'individual',
         credit_limit: a.creditData?.creditLimit ?? null,
+        balance: a.balance ?? null,
+        balance_updated_at: new Date().toISOString(),
         closing_day: dayOf(a.creditData?.balanceCloseDate),
         due_day: dayOf(a.creditData?.balanceDueDate),
         created_by: uid,
@@ -105,14 +107,19 @@ Deno.serve(async (req) => {
         newAccounts += fresh.length;
       }
 
+      for (const a of list.filter((x) => haveSet.has(x.id))) {
+        await sb.from('financial_accounts')
+          .update({ balance: a.balance ?? null, balance_updated_at: new Date().toISOString() })
+          .eq('family_id', family).eq('external_id', a.id);
+      }
+
       const { data: mine, error: me } = await sb
         .from('financial_accounts').select('id,external_id').eq('family_id', family).in('external_id', extIds);
       if (me) throw me;
       const idOf = new Map((mine ?? []).map((x) => [x.external_id, x.id]));
 
-      const from = c.last_synced_at
-        ? isoDate(new Date(new Date(c.last_synced_at).getTime() - 7 * 864e5))
-        : isoDate(new Date(Date.now() - 90 * 864e5));
+      // Sempre 90 dias: lançamentos já vistos são ignorados mais abaixo, então não duplica.
+      const from = isoDate(new Date(Date.now() - 90 * 864e5));
       const to = isoDate(new Date());
 
       for (const a of list) {
@@ -128,6 +135,7 @@ Deno.serve(async (req) => {
           page++;
         } while (page <= totalPages);
         fetchedTransactions += txs.length;
+        details.push(`${String(a.marketingName || a.name || 'conta').slice(0, 20)} (saldo ${a.balance ?? '?'}): ${txs.length} lanç.`);
         if (!txs.length) continue;
 
         // Não reimporta o que já está na fila de revisão (pendente, aprovado ou ignorado).
@@ -161,7 +169,7 @@ Deno.serve(async (req) => {
         }
         } catch (e) {
           // Uma conta com problema (ex.: 410) não impede as outras de sincronizar.
-          errors.push(`${c.institution || 'Banco'} (${c.item_id.slice(0, 8)}) · ${String(a.marketingName || a.name || 'conta').slice(0, 30)}: ${e?.message || 'erro'}`);
+          errors.push(`${c.institution || 'Banco'} (${c.item_id.slice(0, 8)}) · ${String(a.marketingName || a.name || 'conta').slice(0, 30)} (saldo ${a.balance ?? '?'}): ${e?.message || 'erro'}`);
         }
       }
 
