@@ -67,11 +67,18 @@ Deno.serve(async (req) => {
     const key = await pluggyKey();
     let newAccounts = 0, newTransactions = 0, checkedAccounts = 0, fetchedTransactions = 0;
     const errors = [];
+    const details = [];
 
     for (const c of conns) {
       try {
       const accData = await pluggyGet(`/accounts?itemId=${encodeURIComponent(c.item_id)}`, key);
       const list = accData.results ?? [];
+      // Situação da conexão na Pluggy (ajuda a entender por que não chegam lançamentos).
+      try {
+        const it = await pluggyGet(`/items/${encodeURIComponent(c.item_id)}`, key);
+        const parts = list.map((a) => `${a.type === 'CREDIT' ? 'cartão' : 'conta'} saldo ${a.balance ?? '?'}`).join(', ');
+        details.push(`${c.institution || 'Banco'} (${c.item_id.slice(0, 8)}): situação ${it.status}/${it.executionStatus ?? '-'}${it.error?.code ? ' erro ' + it.error.code : ''}; ${parts}`);
+      } catch (_) { details.push(`${c.institution || 'Banco'} (${c.item_id.slice(0, 8)}): situação indisponível`); }
       const extIds = list.map((a) => a.id);
 
       // Contas novas (as já importadas não são alteradas).
@@ -172,7 +179,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    return json({ accounts: newAccounts, new_transactions: newTransactions, checked_accounts: checkedAccounts, fetched_transactions: fetchedTransactions, errors });
+    return json({ accounts: newAccounts, new_transactions: newTransactions, checked_accounts: checkedAccounts, fetched_transactions: fetchedTransactions, errors, details });
   } catch (err) {
     return json({ error: err?.message || 'Erro inesperado na sincronização.' }, 500);
   }
