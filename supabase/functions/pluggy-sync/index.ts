@@ -36,6 +36,8 @@ function payMethod(t, isCard) {
 function suggestMovement(text, aliases, isCard, credit) {
   const n = norm(text);
   if (/(pagamento|pgto|pag)\s*(de\s*)?fatura|fatura\s*(do\s*)?cart|pagamento recebido|pagamento efetuado/.test(n)) return 'card_bill';
+  // Aplicação/resgate automático (ex.: BB Rende Fácil): dinheiro que só muda de lugar, não é gasto nem ganho.
+  if (/rende\s*facil|aplicacao\s*automatica|resgate\s*automatico|aplic\w*\s*(em\s*|de\s*)?(auto|invest|cdb|fundo|poupanca)|resg\w*\s*(em\s*|de\s*)?(auto|invest|cdb|fundo|poupanca)|\b(apl|resg)\.?\s*aut/.test(n)) return 'investment';
   if (/doacao|dizimo|oferta/.test(n)) return 'donation';
   if (aliases.some((a) => n.includes(a))) return 'transfer';
   return null;
