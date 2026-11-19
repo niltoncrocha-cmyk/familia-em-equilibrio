@@ -109,6 +109,7 @@ Deno.serve(async (req) => {
       const to = isoDate(new Date());
 
       for (const a of list) {
+        try {
         const txs = [];
         let page = 1, totalPages = 1;
         do {
@@ -148,6 +149,10 @@ Deno.serve(async (req) => {
           const { error } = await sb.from('bank_import_review').insert(part);
           if (error) throw error;
           newTransactions += part.length;
+        }
+        } catch (e) {
+          // Uma conta com problema (ex.: 410) não impede as outras de sincronizar.
+          errors.push(`${c.institution || 'Banco'} (${c.item_id.slice(0, 8)}) · ${String(a.marketingName || a.name || 'conta').slice(0, 30)}: ${e?.message || 'erro'}`);
         }
       }
 
