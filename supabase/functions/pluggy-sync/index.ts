@@ -65,7 +65,7 @@ Deno.serve(async (req) => {
     if (!conns?.length) return json({ error: 'Nenhum banco conectado. Use "Conectar banco" primeiro.' }, 400);
 
     const key = await pluggyKey();
-    let newAccounts = 0, newTransactions = 0;
+    let newAccounts = 0, newTransactions = 0, checkedAccounts = 0, fetchedTransactions = 0;
     const errors = [];
 
     for (const c of conns) {
@@ -110,6 +110,7 @@ Deno.serve(async (req) => {
 
       for (const a of list) {
         try {
+        checkedAccounts++;
         const txs = [];
         let page = 1, totalPages = 1;
         do {
@@ -119,6 +120,7 @@ Deno.serve(async (req) => {
           for (const t of res.results ?? []) if (t.status !== 'PENDING' && Number(t.amount) !== 0) txs.push(t);
           page++;
         } while (page <= totalPages);
+        fetchedTransactions += txs.length;
         if (!txs.length) continue;
 
         // Não reimporta o que já está na fila de revisão (pendente, aprovado ou ignorado).
@@ -170,7 +172,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    return json({ accounts: newAccounts, new_transactions: newTransactions, errors });
+    return json({ accounts: newAccounts, new_transactions: newTransactions, checked_accounts: checkedAccounts, fetched_transactions: fetchedTransactions, errors });
   } catch (err) {
     return json({ error: err?.message || 'Erro inesperado na sincronização.' }, 500);
   }
