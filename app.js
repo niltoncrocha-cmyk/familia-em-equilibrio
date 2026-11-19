@@ -41,7 +41,7 @@ async function loadAll(){if(!family){renderFamily();return}const [m,c,a,t,b,cn,r
  client.from('transactions').select('description,counterparty,amount,type,category_id,movement_kind,occurred_on,source').eq('family_id',family).order('occurred_on',{ascending:false}).limit(3000),
  client.from('investments').select('*').eq('family_id',family).order('balance',{ascending:false})
  ]);for(const r of [m,c,a,t,b])if(r.error)throw r.error;members=m.data||[];categories=c.data||[];accounts=a.data||[];transactions=t.data||[];budgets=b.data||[];connections=cn.error?[]:(cn.data||[]);reviews=rv.error?[]:(rv.data||[]);aliases=al.error?[]:(al.data||[]);history=hs.error?[]:(hs.data||[]);investments=iv.error?[]:(iv.data||[]);renderAll()}
-function renderAll(){renderInvestments();renderAliases();renderDashboard();renderTransactions();renderAccounts();renderBudgets();renderFamily();fillCategories();renderBank()}
+function renderAll(){renderWealth();renderInvestments();renderAliases();renderDashboard();renderTransactions();renderAccounts();renderBudgets();renderFamily();fillCategories();renderBank()}
 const PM={pix:'Pix',cartao_credito:'Cartão de crédito',cartao_debito:'Cartão de débito',boleto:'Boleto',ted_doc:'TED/DOC',dinheiro:'Dinheiro',outro:'Outro'};
 const KIND={normal:'Despesa ou receita normal',transfer:'Transferência entre contas da família',card_bill:'Pagamento de fatura do cartão',donation:'Doação / oferta (conta como despesa)',investment:'Aplicação / resgate de investimento'};
 const catName=t=>t.categories?.name||((t.movement_kind||'normal')==='donation'?'Doações e ofertas':'Sem categoria');
@@ -190,7 +190,7 @@ const INV_TYPE={FIXED_INCOME:'Renda fixa',MUTUAL_FUND:'Fundos de investimento',E
 function renderInvestments(){const box=$('investmentsContent');if(!box)return;
   const sum=(arr,f)=>arr.reduce((s,x)=>s+(Number(f(x))||0),0);
   const total=sum(investments,i=>i.balance),invested=sum(investments.filter(i=>i.amount_invested!=null),i=>i.amount_invested),profit=sum(investments.filter(i=>i.profit!=null),i=>i.profit);
-  const bank=sum(accounts.filter(a=>a.account_type==='bank_account'&&a.balance!=null),a=>a.balance),cards=sum(accounts.filter(a=>a.account_type==='credit_card'&&a.balance!=null),a=>a.balance);
+  const bank=sum(accounts.filter(a=>a.account_type==='bank_account'&&a.balance!=null),a=>a.balance),cards=cardOpen().total;
   const last=investments.map(i=>i.updated_at).sort().pop();
   const metric=(t,v,s)=>`<article class="metric"><span>${t}</span><strong>${v}</strong><small>${s}</small></article>`;
   let html=`<div class="metric-grid">${metric('Investimentos',money(total),investments.length+' aplicações')}${metric('Saldo em contas',money(bank),'Contas bancárias conectadas')}${metric('Cartões em aberto',money(cards),'Valor usado nos cartões')}${metric('Rentabilidade',investments.some(i=>i.profit!=null)?money(profit):'—',invested?`sobre ${money(invested)} aplicados`:'Quando o banco informar')}</div>`;
@@ -210,3 +210,22 @@ $('approveInvest').onclick=async()=>{const inv=reviews.filter(r=>(r.suggested_mo
     const {error}=await client.from('transactions').insert(rows);if(error)throw error;
     const {error:e2}=await client.from('bank_import_review').update({review_status:'approved',final_movement:'investment',reviewed_by:session.user.id,reviewed_at:new Date().toISOString()}).in('id',inv.map(r=>r.id));if(e2)throw e2;
     await loadAll();toast(`${inv.length} lançamento(s) aprovados como investimento.`)}catch(err){toast(err.message)}finally{b.disabled=false}};
+
+// Resumo patrimonial da tela inicial: contas, investimentos e cartões.
+// Cartões com o mesmo limite e o mesmo valor em aberto (limite compartilhado) entram uma única vez na soma.
+function cardOpen(){const seen=new Set(),list=[];let total=0;
+  for(const a of accounts.filter(x=>x.account_type==='credit_card'&&x.balance!=null)){const key=a.credit_limit&&Number(a.balance)>0?a.credit_limit+'|'+a.balance:a.id;const shared=seen.has(key);seen.add(key);list.push({a,shared});if(!shared)total+=Number(a.balance)}
+  return {total,list}}
+function renderWealth(){const el=$('wealthPanel');if(!el)return;
+  const bankList=accounts.filter(a=>a.account_type==='bank_account'&&a.balance!=null),bank=bankList.reduce((s,a)=>s+Number(a.balance),0);
+  const inv=investments.reduce((s,i)=>s+(Number(i.balance)||0),0),cards=cardOpen(),net=bank+inv-cards.total;
+  if(!bankList.length&&!investments.length&&!cards.list.length){el.innerHTML='';return}
+  const card=(t,v,s,cls='')=>`<article class="metric ${cls}"><span>${t}</span><strong>${money(v)}</strong><small>${s}</small></article>`;
+  const invByType={};investments.forEach(i=>{const k=INV_TYPE[i.type||'OTHER']||i.type||'Outros';invByType[k]=(invByType[k]||0)+(Number(i.balance)||0)});
+  const row=(n,v,x='')=>`<div class="tx-row"><div><strong>${esc(n)}</strong>${x?`<small>${esc(x)}</small>`:''}</div><strong>${money(v)}</strong></div>`;
+  el.innerHTML=`<div class="metric-grid">${card('Saldo em contas',bank,bankList.length+' conta(s) bancária(s)')}${card('Investimentos',inv,investments.length+' aplicação(ões)')}${card('Cartões em aberto',cards.total,cards.list.length+' cartão(ões)')}${card('Total (contas + investimentos − cartões)',net,'Posição atual',net>=0?'highlight':'')}</div>
+  <details class="panel" style="margin-bottom:16px"><summary style="cursor:pointer;font-weight:600">Ver detalhes dos saldos</summary>
+   <h4>Contas</h4>${bankList.map(a=>row(a.name,a.balance,a.owner_name||'')).join('')||'<p class="muted tiny">Sem contas com saldo.</p>'}
+   <h4>Investimentos</h4>${Object.entries(invByType).sort((x,y)=>y[1]-x[1]).map(([n,v])=>row(n,v)).join('')||'<p class="muted tiny">Nenhum investimento importado.</p>'}
+   <h4>Cartões em aberto</h4>${cards.list.map(({a,shared})=>row(a.name,a.balance,shared?'mesmo limite e valor de outro cartão: contado uma vez':(a.credit_limit?'limite '+money(a.credit_limit):''))).join('')||'<p class="muted tiny">Sem cartões com saldo.</p>'}
+   <p class="tiny muted">Valores informados pelos bancos${(()=>{const d=[...accounts.map(a=>a.balance_updated_at),...investments.map(i=>i.updated_at)].filter(Boolean).sort().pop();return d?' em '+new Date(d).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):''})()}. Se um investimento (como o Rende Fácil) já estiver somado no saldo da conta, o total pode ficar maior que o real.</p></details>`}
