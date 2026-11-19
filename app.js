@@ -86,8 +86,26 @@ async function rejectReview(row){
 }
 $('reviewList').addEventListener('click',async e=>{const b=e.target.closest('button[data-act]');if(!b)return;const row=b.closest('[data-review]');b.disabled=true;try{await(b.dataset.act==='approve'?approveReview(row):rejectReview(row))}catch(err){toast(err.message);b.disabled=false}});
 $('reviewList').addEventListener('change',e=>{if(e.target.classList.contains('rv-type'))e.target.closest('[data-review]').querySelector('.rv-cat').innerHTML=catOptions(e.target.value)});
-$('connectBank').onclick=()=>{$('itemId').value='';$('itemName').value='';message('connectMessage','');openDialog('connectDialog')};
+$('connectManual').onclick=()=>{$('itemId').value='';$('itemName').value='';message('connectMessage','');openDialog('connectDialog')};
 $('connectForm').onsubmit=async e=>{e.preventDefault();try{const item=$('itemId').value.trim();if(!/^[0-9a-f-]{36}$/i.test(item))throw new Error('Item ID inválido. Copie o código novamente no app de demonstração da Pluggy.');const {error}=await client.from('bank_connections').insert({family_id:family,provider:'pluggy',item_id:item,institution:$('itemName').value.trim()||null,created_by:session.user.id});if(error)throw error;closeDialog('connectDialog');await loadAll();toast('Banco conectado. Toque em Sincronizar agora.')}catch(err){message('connectMessage',err.message)}};
 $('syncBank').onclick=async()=>{const btn=$('syncBank');btn.disabled=true;btn.textContent='Sincronizando…';try{const {data,error}=await client.functions.invoke('pluggy-sync');if(error){let msg=error.message;try{const j=await error.context.json();msg=j.error||msg}catch(_){}throw new Error(msg)}await loadAll();toast(`Sincronizado: ${data.new_transactions} novos lançamentos para revisar.`+(data.errors?.length?' Aviso: '+data.errors[0]:''))}catch(err){toast(err.message)}finally{btn.textContent='Sincronizar agora';btn.disabled=!connections.length}};
 if(configured&&window.supabase){client=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);client.auth.getSession().then(({data})=>{if(data.session){session=data.session;boot()}else showAuth()});client.auth.onAuthStateChange((_event,s)=>{if(s){session=s;boot()}else showAuth()})}else showAuth();
 if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+
+// Conexão online: abre o widget oficial da Pluggy (escolher banco, entrar e autorizar no próprio widget).
+$('connectBank').onclick=async()=>{const btn=$('connectBank');btn.disabled=true;try{
+  if(typeof PluggyConnect==='undefined')throw new Error('O widget da Pluggy não carregou. Verifique a internet e tente de novo.');
+  const {data,error}=await client.functions.invoke('pluggy-connect-token');
+  if(error){let msg=error.message;try{const j=await error.context.json();msg=j.error||msg}catch(_){}throw new Error(msg)}
+  const widget=new PluggyConnect({connectToken:data.connectToken,includeSandbox:false,
+    onSuccess:async({item})=>{try{
+      const {error:ie}=await client.from('bank_connections').insert({family_id:family,provider:'pluggy',item_id:item.id,institution:item.connector?.name||null,created_by:session.user.id});
+      if(ie&&ie.code!=='23505')throw ie;
+      await loadAll();toast('Banco conectado. Toque em Sincronizar agora.')}catch(err){toast(err.message)}},
+    onError:err=>toast(err?.message||'Não foi possível conectar o banco.')});
+  await widget.init()}catch(err){toast(err.message)}finally{btn.disabled=false}};
+// Instalação como app (Android/Chrome): mostra o botão quando o navegador permitir.
+let installEvt=null;
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEvt=e;$('installApp').classList.remove('hidden')});
+$('installApp').onclick=async()=>{if(!installEvt)return;installEvt.prompt();await installEvt.userChoice;installEvt=null;$('installApp').classList.add('hidden')};
+window.addEventListener('appinstalled',()=>$('installApp').classList.add('hidden'));

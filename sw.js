@@ -1,5 +1,5 @@
-const CACHE='familia-equilibrio-v2';
-const FILES=['./','./index.html','./styles.css','./app.js','./manifest.webmanifest','./assets/icon.svg'];
+const CACHE='familia-equilibrio-v3';
+const FILES=['./','./index.html','./styles.css','./app.js','./manifest.webmanifest','./assets/icon.svg','./assets/icon-192.png','./assets/icon-512.png'];
 
 self.addEventListener('install',e=>{
   self.skipWaiting();

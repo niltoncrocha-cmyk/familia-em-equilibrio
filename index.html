@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#123c2f"><meta name="description" content="Gestão financeira familiar inteligente">
-  <link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="assets/icon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
   <title>Família em Equilíbrio</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -36,7 +36,7 @@
       <div class="sidebar-bottom"><span id="sideUser" class="tiny"></span><button id="logoutBtn" class="text-button">Sair da conta ↗</button></div>
     </aside>
     <main class="main">
-      <header class="topbar"><div><p class="eyebrow">SEU PAINEL FINANCEIRO</p><h2 id="pageTitle">Visão geral</h2></div><div class="top-actions"><span class="month-pill" id="monthLabel"></span><button class="primary compact" id="quickAdd">＋ Lançar</button></div></header>
+      <header class="topbar"><div><p class="eyebrow">SEU PAINEL FINANCEIRO</p><h2 id="pageTitle">Visão geral</h2></div><div class="top-actions"><span class="month-pill" id="monthLabel"></span><button class="secondary compact hidden" id="installApp" type="button">Instalar app</button><button class="primary compact" id="quickAdd">＋ Lançar</button></div></header>
       <section id="dashboardPage" class="page">
         <div class="welcome-row"><div><h3>Olá! Vamos cuidar do dinheiro da família.</h3><p class="muted">Acompanhe os resultados e identifique oportunidades de economia.</p></div><div class="goal-chip"><span>Meta de economia</span><strong>20%</strong></div></div>
         <div class="metric-grid">
@@ -52,7 +52,7 @@
 
       <section id="transactionsPage" class="page hidden"><div class="section-head"><div><h3>Movimentações da família</h3><p class="muted">Registre receitas e despesas em poucos segundos.</p></div><button class="primary" id="newTransaction">＋ Novo lançamento</button></div><div class="panel"><div class="filters"><input id="searchTransactions" placeholder="Buscar descrição ou categoria"><select id="typeFilter"><option value="all">Todos os tipos</option><option value="expense">Despesas</option><option value="income">Receitas</option></select></div><div id="transactionsList" class="table-wrap"></div></div></section>
 
-      <section id="cardsPage" class="page hidden"><div class="section-head"><div><h3>Contas e cartões</h3><p class="muted">Cadastre meios de pagamento individuais ou compartilhados.</p></div><button class="primary" id="newAccount">＋ Adicionar</button></div><div id="accountsList" class="account-grid"></div><article class="panel"><div class="panel-heading"><div><h3>Conexão bancária</h3><p class="muted">Importação automática via MeuPluggy (Open Finance). Os lançamentos chegam para revisão antes de entrar nos números.</p></div></div><div id="connectionsList"></div><div class="button-row"><button class="secondary" id="connectBank" type="button">Conectar banco</button><button class="primary" id="syncBank" type="button" disabled>Sincronizar agora</button></div></article><article class="panel"><div class="panel-heading"><div><h3>Lançamentos para revisar</h3><p class="muted">Confirme o tipo e a categoria de cada item. Só entram nos números depois de aprovados.</p></div></div><div id="reviewList"></div></article></section>
+      <section id="cardsPage" class="page hidden"><div class="section-head"><div><h3>Contas e cartões</h3><p class="muted">Cadastre meios de pagamento individuais ou compartilhados.</p></div><button class="primary" id="newAccount">＋ Adicionar</button></div><div id="accountsList" class="account-grid"></div><article class="panel"><div class="panel-heading"><div><h3>Conexão bancária</h3><p class="muted">Importação automática via MeuPluggy (Open Finance). Os lançamentos chegam para revisão antes de entrar nos números.</p></div></div><div id="connectionsList"></div><div class="button-row"><button class="secondary" id="connectBank" type="button">Conectar banco</button><button class="text-button" id="connectManual" type="button">Já tenho um Item ID</button><button class="primary" id="syncBank" type="button" disabled>Sincronizar agora</button></div></article><article class="panel"><div class="panel-heading"><div><h3>Lançamentos para revisar</h3><p class="muted">Confirme o tipo e a categoria de cada item. Só entram nos números depois de aprovados.</p></div></div><div id="reviewList"></div></article></section>
 
       <section id="budgetsPage" class="page hidden"><div class="section-head"><div><h3>Orçamento familiar</h3><p class="muted">Um orçamento comum, com limites por categoria e integrante.</p></div><button class="primary" id="newBudget">＋ Definir limite</button></div><div id="budgetsList" class="budget-list"></div></section>
 
@@ -71,5 +71,5 @@
   <dialog id="connectDialog" class="modal"><form id="connectForm" method="dialog"><div class="modal-head"><div><p class="eyebrow">OPEN FINANCE</p><h2>Conectar banco</h2></div><button type="button" class="close" data-close="connectDialog">×</button></div><div class="form-grid"><label class="span-2">Item ID da Pluggy<input id="itemId" required placeholder="Cole o código copiado no app de demonstração" autocomplete="off"></label><label class="span-2">Nome do banco (opcional)<input id="itemName" maxlength="60" placeholder="Ex.: Bradesco"></label></div><div class="modal-actions"><button type="button" class="secondary" data-close="connectDialog">Cancelar</button><button class="primary" type="submit">Conectar</button></div><p id="connectMessage" class="form-message"></p></form></dialog>
 
   <div id="toast" class="toast" role="status"></div>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="https://cdn.pluggy.ai/pluggy-connect/v2.7.0/pluggy-connect.js"></script><script src="app.js"></script>
 </body></html>
