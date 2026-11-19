@@ -18,6 +18,29 @@ const brDate = (iso) => new Date(new Date(iso).getTime() - 3 * 3600e3).toISOStri
 const dayOf = (iso) => (iso ? Number(String(iso).slice(8, 10)) || null : null);
 const chunk = (arr, n) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
 
+const norm = (x) => String(x ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+// Forma de pagamento deduzida dos dados do banco (Pix, TED/DOC, boleto, débito, cartão de crédito).
+function payMethod(t, isCard) {
+  if (isCard) return 'cartao_credito';
+  const raw = norm([t.paymentData?.paymentMethod, t.operationType, t.description, t.descriptionRaw].join(' '));
+  if (/\bpix\b/.test(raw)) return 'pix';
+  if (/\bted\b|\bdoc\b|transfer/.test(raw)) return 'ted_doc';
+  if (/boleto|titulo|cobranca/.test(raw)) return 'boleto';
+  if (/saque/.test(raw)) return 'dinheiro';
+  if (/debito|compra/.test(raw)) return 'cartao_debito';
+  return 'outro';
+}
+
+// Sugestão de tipo de movimento (a pessoa sempre confirma na revisão).
+function suggestMovement(text, aliases, isCard, credit) {
+  const n = norm(text);
+  if (/(pagamento|pgto|pag)\s*(de\s*)?fatura|fatura\s*(do\s*)?cart|pagamento recebido|pagamento efetuado/.test(n)) return 'card_bill';
+  if (/doacao|dizimo|oferta/.test(n)) return 'donation';
+  if (aliases.some((a) => n.includes(a))) return 'transfer';
+  return null;
+}
+
 async function pluggyKey() {
   // trim(): ao colar pelo celular costuma sobrar espaço ou quebra de linha no fim do valor.
   const clientId = (Deno.env.get('PLUGGY_CLIENT_ID') ?? '').trim();
@@ -68,6 +91,12 @@ Deno.serve(async (req) => {
       .from('bank_connections').select('id,item_id,institution,last_synced_at').eq('family_id', family);
     if (ce) throw ce;
     if (!conns?.length) return json({ error: 'Nenhum banco conectado. Use "Conectar banco" primeiro.' }, 400);
+
+    // Nomes que indicam transferência dentro da família (pessoas cadastradas + integrantes).
+    const { data: al } = await sb.from('family_aliases').select('name').eq('family_id', family);
+    const { data: mem } = await sb.from('family_members').select('display_name').eq('family_id', family).eq('active', true);
+    const aliasList = [...(al ?? []).map((x) => x.name), ...(mem ?? []).map((x) => x.display_name)]
+      .map(norm).map((x) => x.trim()).filter((x) => x.length >= 3);
 
     const key = await pluggyKey();
     let newAccounts = 0, newTransactions = 0, checkedAccounts = 0, fetchedTransactions = 0;
@@ -165,6 +194,9 @@ Deno.serve(async (req) => {
             transaction_date: brDate(t.date),
             // Em cartão, crédito costuma ser pagamento de fatura ou estorno: deixa para a pessoa decidir.
             suggested_type: isCard ? (credit ? null : 'expense') : (credit ? 'income' : 'expense'),
+            payment_method: payMethod(t, isCard),
+            counterparty: String(t.paymentData?.receiver?.name || t.paymentData?.payer?.name || t.merchant?.name || '').slice(0, 120) || null,
+            suggested_movement: suggestMovement(`${t.description ?? ''} ${t.descriptionRaw ?? ''} ${t.paymentData?.receiver?.name ?? ''} ${t.paymentData?.payer?.name ?? ''}`, aliasList, isCard, credit),
           };
         });
         for (const part of chunk(rows, 200)) {
@@ -192,7 +224,28 @@ Deno.serve(async (req) => {
       }
     }
 
-    return json({ accounts: newAccounts, new_transactions: newTransactions, checked_accounts: checkedAccounts, fetched_transactions: fetchedTransactions, errors, details });
+    // Pareamento: saída numa conta e entrada de mesmo valor em outra conta da família (até 2 dias) = transferência.
+    let pairedTransfers = 0;
+    try {
+      const { data: pend } = await sb.from('bank_import_review')
+        .select('id,account_id,amount,transaction_date,suggested_type,suggested_movement')
+        .eq('family_id', family).eq('review_status', 'pending').limit(2000);
+      const open = (pend ?? []).filter((r) => !r.suggested_movement && r.account_id);
+      const used = new Set();
+      for (const d of open.filter((r) => r.suggested_type === 'expense')) {
+        if (used.has(d.id)) continue;
+        const m = open.find((c) => !used.has(c.id) && c.id !== d.id && c.suggested_type === 'income'
+          && Number(c.amount) === Number(d.amount) && c.account_id !== d.account_id
+          && Math.abs(new Date(c.transaction_date).getTime() - new Date(d.transaction_date).getTime()) <= 2 * 864e5);
+        if (m) { used.add(d.id); used.add(m.id); }
+      }
+      if (used.size) {
+        await sb.from('bank_import_review').update({ suggested_movement: 'transfer' }).in('id', [...used]);
+        pairedTransfers = used.size;
+      }
+    } catch (_) { /* pareamento é um extra: não derruba a sincronização */ }
+
+    return json({ paired_transfers: pairedTransfers, accounts: newAccounts, new_transactions: newTransactions, checked_accounts: checkedAccounts, fetched_transactions: fetchedTransactions, errors, details });
   } catch (err) {
     return json({ error: err?.message || 'Erro inesperado na sincronização.' }, 500);
   }
