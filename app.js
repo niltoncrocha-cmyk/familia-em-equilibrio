@@ -134,11 +134,15 @@ $('syncBank').onclick=async()=>{const btn=$('syncBank');btn.disabled=true;btn.te
   $('syncResult').textContent=[`Última sincronização às ${when}: ${data.new_transactions} novos lançamentos para revisar; a Pluggy devolveu ${data.fetched_transactions} lançamentos em ${data.checked_accounts} contas.`,...(data.errors||[]).map(x=>'⚠ '+x),...(data.details||[]).map(x=>'• '+x)].join('\n');
   toast(`Sincronizado: ${data.new_transactions} novos lançamentos para revisar.`+(data.errors?.length?' Há avisos abaixo.':''))}catch(err){$('syncResult').textContent='⚠ '+err.message;toast(err.message)}finally{btn.textContent='Sincronizar agora';btn.disabled=!connections.length}};
 if(configured&&window.supabase){client=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);client.auth.getSession().then(({data})=>{if(data.session){session=data.session;boot()}else showAuth()});client.auth.onAuthStateChange((_event,s)=>{if(s){session=s;boot()}else showAuth()})}else showAuth();
-const APP_VERSION='16';
+const APP_VERSION='17';
 if('serviceWorker'in navigator){const hadController=!!navigator.serviceWorker.controller;let reloaded=false;
   navigator.serviceWorker.addEventListener('controllerchange',()=>{if(hadController&&!reloaded){reloaded=true;location.reload()}});
   window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(r=>r.update()).catch(()=>{}))}
-window.addEventListener('DOMContentLoaded',()=>{const v=document.getElementById('appVersion');if(v)v.textContent='Versão do app: '+APP_VERSION});
+async function hardRefresh(){try{const rs=await navigator.serviceWorker?.getRegistrations?.();for(const r of rs||[])await r.unregister()}catch(e){}try{for(const k of await caches.keys())await caches.delete(k)}catch(e){}const u=new URL(location.href);u.searchParams.set('v',Date.now());location.replace(u.toString())}
+// Ao abrir (Chrome ou app), compara a versão carregada com a publicada; se diferir, limpa o cache e recarrega sozinho (uma vez).
+(async()=>{try{const t=await (await fetch('sw.js?c='+Date.now(),{cache:'no-store'})).text(),m=t.match(/familia-equilibrio-v(\d+)/);
+  if(m&&m[1]!==APP_VERSION&&!sessionStorage.getItem('hr'+m[1])){sessionStorage.setItem('hr'+m[1],'1');hardRefresh()}}catch(e){}})();
+window.addEventListener('DOMContentLoaded',()=>{const b=document.getElementById('clearCache');if(b)b.onclick=hardRefresh;const v=document.getElementById('appVersion');if(v)v.textContent='Versão do app: '+APP_VERSION});
 
 // Conexão online: abre o widget oficial da Pluggy (escolher banco, entrar e autorizar no próprio widget).
 $('connectBank').onclick=async()=>{const btn=$('connectBank');btn.disabled=true;try{
