@@ -10,7 +10,7 @@ const money = n => new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL
 const today = () => new Date().toISOString().slice(0,10);
 const month = () => today().slice(0,7);
 const monthName = new Intl.DateTimeFormat('pt-BR',{month:'long',year:'numeric'}).format(new Date());
-let client=null, session=null, family=null, members=[], categories=[], accounts=[], transactions=[], budgets=[], connections=[], reviews=[], aliases=[], history=[];
+let client=null, session=null, family=null, members=[], categories=[], accounts=[], transactions=[], budgets=[], connections=[], reviews=[], aliases=[], history=[], investments=[];
 const fallbackCategories = [
  ['Moradia','expense','fixed'],['Alimentação','expense','variable'],['Supermercado','expense','variable'],['Restaurantes e delivery','expense','variable'],['Transporte e combustível','expense','variable'],['Saúde e farmácia','expense','variable'],['Educação','expense','fixed'],['Lazer','expense','variable'],['Vestuário','expense','variable'],['Assinaturas','expense','fixed'],['Contas da casa','expense','fixed'],['Impostos e taxas','expense','fixed'],['Outros gastos','expense','variable'],['Salário','income','income'],['Renda extra','income','income'],['Investimentos e rendimentos','income','income'],['Outras receitas','income','income']
 ];
@@ -21,7 +21,7 @@ function showApp(){ $('authView').classList.add('hidden');$('appView').classList
 function openDialog(id){$(id).showModal()}
 function closeDialog(id){$(id).close()}
 document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',()=>closeDialog(b.dataset.close)));
-function navigate(page){document.querySelectorAll('.page').forEach(p=>p.classList.add('hidden'));$(page+'Page').classList.remove('hidden');document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===page));$('pageTitle').textContent=({dashboard:'Visão geral',transactions:'Lançamentos',cards:'Contas e cartões',budgets:'Orçamentos',insights:'Vilões financeiros',family:'Família'})[page]||'Visão geral';if(page==='insights')renderInsights()}
+function navigate(page){document.querySelectorAll('.page').forEach(p=>p.classList.add('hidden'));$(page+'Page').classList.remove('hidden');document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===page));$('pageTitle').textContent=({dashboard:'Visão geral',transactions:'Lançamentos',cards:'Contas e cartões',budgets:'Orçamentos',insights:'Vilões financeiros',investments:'Investimentos',family:'Família'})[page]||'Visão geral';if(page==='insights')renderInsights()}
 document.querySelectorAll('.nav-item').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.page)));
 document.querySelectorAll('[data-goto]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.goto)));
 $('quickAdd').onclick=$('newTransaction').onclick=()=>{prepareTransactionForm();openDialog('transactionDialog')};$('newAccount').onclick=()=>{prepareMemberSelect('accountOwner');openDialog('accountDialog')};$('newBudget').onclick=()=>{prepareBudgetForm();openDialog('budgetDialog')};$('logoutBtn').onclick=async()=>{if(client)await client.auth.signOut();session=null;showAuth()};
@@ -29,7 +29,7 @@ $('authForm').addEventListener('submit',async e=>{e.preventDefault();if(!configu
 $('signupBtn').onclick=async()=>{if(!configured){message('authMessage','Configure primeiro a URL e a chave pública do Supabase no app.js.');return}const {data,error}=await client.auth.signUp({email:$('authEmail').value,password:$('authPassword').value});if(error){message('authMessage',error.message);return}message('authMessage',data.session?'Acesso criado. Entre para continuar.':'Acesse seu e-mail para confirmar o cadastro e depois entre.');};
 async function boot(){showApp();$('sideUser').textContent=session.user.email;try{await loadFamily();await loadAll()}catch(e){toast('Não foi possível carregar os dados: '+e.message)}}
 async function loadFamily(){let {data,error}=await client.from('family_members').select('family_id,role,display_name').eq('user_id',session.user.id).eq('active',true).maybeSingle();if(error)throw error;if(!data){$('familyInfo').innerHTML='<p class="muted">Seu usuário ainda não está vinculado a uma família. Execute a função de configuração inicial descrita no README ou peça ao administrador para concluir o cadastro.</p>';return}family=data.family_id;}
-async function loadAll(){if(!family){renderFamily();return}const [m,c,a,t,b,cn,rv,al,hs]=await Promise.all([
+async function loadAll(){if(!family){renderFamily();return}const [m,c,a,t,b,cn,rv,al,hs,iv]=await Promise.all([
  client.from('family_members').select('user_id,display_name,role').eq('family_id',family).eq('active',true),
  client.from('categories').select('*').or(`family_id.eq.${family},family_id.is.null`).order('name'),
  client.from('financial_accounts').select('*').eq('family_id',family).eq('active',true).order('name'),
@@ -38,9 +38,10 @@ async function loadAll(){if(!family){renderFamily();return}const [m,c,a,t,b,cn,r
  client.from('bank_connections').select('id,institution,last_synced_at').eq('family_id',family).order('created_at'),
  client.from('bank_import_review').select('*').eq('family_id',family).eq('review_status','pending').order('transaction_date',{ascending:false}).limit(200),
  client.from('family_aliases').select('id,name').eq('family_id',family).order('name'),
- client.from('transactions').select('description,counterparty,amount,type,category_id,movement_kind,occurred_on,source').eq('family_id',family).order('occurred_on',{ascending:false}).limit(3000)
- ]);for(const r of [m,c,a,t,b])if(r.error)throw r.error;members=m.data||[];categories=c.data||[];accounts=a.data||[];transactions=t.data||[];budgets=b.data||[];connections=cn.error?[]:(cn.data||[]);reviews=rv.error?[]:(rv.data||[]);aliases=al.error?[]:(al.data||[]);history=hs.error?[]:(hs.data||[]);renderAll()}
-function renderAll(){renderAliases();renderDashboard();renderTransactions();renderAccounts();renderBudgets();renderFamily();fillCategories();renderBank()}
+ client.from('transactions').select('description,counterparty,amount,type,category_id,movement_kind,occurred_on,source').eq('family_id',family).order('occurred_on',{ascending:false}).limit(3000),
+ client.from('investments').select('*').eq('family_id',family).order('balance',{ascending:false})
+ ]);for(const r of [m,c,a,t,b])if(r.error)throw r.error;members=m.data||[];categories=c.data||[];accounts=a.data||[];transactions=t.data||[];budgets=b.data||[];connections=cn.error?[]:(cn.data||[]);reviews=rv.error?[]:(rv.data||[]);aliases=al.error?[]:(al.data||[]);history=hs.error?[]:(hs.data||[]);investments=iv.error?[]:(iv.data||[]);renderAll()}
+function renderAll(){renderInvestments();renderAliases();renderDashboard();renderTransactions();renderAccounts();renderBudgets();renderFamily();fillCategories();renderBank()}
 const PM={pix:'Pix',cartao_credito:'Cartão de crédito',cartao_debito:'Cartão de débito',boleto:'Boleto',ted_doc:'TED/DOC',dinheiro:'Dinheiro',outro:'Outro'};
 const KIND={normal:'Despesa ou receita normal',transfer:'Transferência entre contas da família',card_bill:'Pagamento de fatura do cartão',donation:'Doação / oferta (conta como despesa)'};
 const catName=t=>t.categories?.name||((t.movement_kind||'normal')==='donation'?'Doações e ofertas':'Sem categoria');
@@ -175,3 +176,19 @@ $('reviewFilter').onchange=renderBank;
 $('scanReview').onclick=()=>{learnMap=null;renderBank();
   let has=0,dups=0;for(const r of reviews){const type=r.suggested_type||'expense',sug=suggestFor(r);const ok=r.suggested_movement||(sug&&((sug.cat&&categories.some(c=>c.id===sug.cat&&c.kind===(type==='income'?'income':'expense')))||sug.kind!=='normal'));if(ok)has++;if(dupOf(r))dups++}
   $('scanResult').textContent=reviews.length?`Varredura concluída: ${has} de ${reviews.length} itens já vieram classificados pelo histórico (${reviews.length-has} precisam da sua classificação) e ${dups} possível(is) duplicado(s). Revise e toque em Aprovar.`:'Nenhum item aguardando revisão.';}
+
+// Aba Investimentos: carteira importada das contas conectadas + visão de contas e cartões.
+const INV_TYPE={FIXED_INCOME:'Renda fixa',MUTUAL_FUND:'Fundos de investimento',EQUITY:'Ações',ETF:'ETFs',SECURITY:'Previdência e outros títulos',CO:'COE',COE:'COE',OTHER:'Outros'};
+function renderInvestments(){const box=$('investmentsContent');if(!box)return;
+  const sum=(arr,f)=>arr.reduce((s,x)=>s+(Number(f(x))||0),0);
+  const total=sum(investments,i=>i.balance),invested=sum(investments.filter(i=>i.amount_invested!=null),i=>i.amount_invested),profit=sum(investments.filter(i=>i.profit!=null),i=>i.profit);
+  const bank=sum(accounts.filter(a=>a.account_type==='bank_account'&&a.balance!=null),a=>a.balance),cards=sum(accounts.filter(a=>a.account_type==='credit_card'&&a.balance!=null),a=>a.balance);
+  const last=investments.map(i=>i.updated_at).sort().pop();
+  const metric=(t,v,s)=>`<article class="metric"><span>${t}</span><strong>${v}</strong><small>${s}</small></article>`;
+  let html=`<div class="metric-grid">${metric('Investimentos',money(total),investments.length+' aplicações')}${metric('Saldo em contas',money(bank),'Contas bancárias conectadas')}${metric('Cartões em aberto',money(cards),'Valor usado nos cartões')}${metric('Rentabilidade',investments.some(i=>i.profit!=null)?money(profit):'—',invested?`sobre ${money(invested)} aplicados`:'Quando o banco informar')}</div>`;
+  if(!investments.length){html+='<div class="panel empty-state">Nenhum investimento encontrado. Toque em <strong>Sincronizar agora</strong> em Contas e cartões. Se continuar vazio, o banco pode não estar compartilhando investimentos no Open Finance: confira as permissões da conexão no MeuPluggy.</div>';box.innerHTML=html;return}
+  const groups={};investments.forEach(i=>{const k=i.type||'OTHER';(groups[k]=groups[k]||[]).push(i)});
+  html+=Object.entries(groups).sort((x,y)=>sum(y[1],i=>i.balance)-sum(x[1],i=>i.balance)).map(([k,list])=>{const sub=sum(list,i=>i.balance);
+    return `<article class="panel"><div class="panel-heading"><div><h3>${esc(INV_TYPE[k]||k)}</h3><p class="muted">${money(sub)}${total?` · ${Math.round(sub/total*100)}% da carteira`:''}</p></div></div>${list.map(i=>`<div class="tx-row"><div><strong>${esc(i.name)}</strong><small>${esc([i.institution,i.issuer&&i.issuer!==i.institution?i.issuer:null,i.annual_rate!=null?Number(i.annual_rate).toLocaleString('pt-BR',{maximumFractionDigits:2})+'% a.a.':null,i.due_date?'vence '+formatDate(i.due_date):null].filter(Boolean).join(' · '))}</small></div><strong>${money(i.balance)}</strong></div>`).join('')}</article>`}).join('');
+  html+=`<p class="tiny muted">Atualizado em ${last?new Date(last).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'}. Os valores vêm do banco via Open Finance; não entram nas receitas e despesas.</p>`;
+  box.innerHTML=html}

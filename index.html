@@ -31,6 +31,7 @@
         <button class="nav-item" data-page="cards">▤ <span>Contas e cartões</span></button>
         <button class="nav-item" data-page="budgets">◷ <span>Orçamentos</span></button>
         <button class="nav-item" data-page="insights">◈ <span>Vilões financeiros</span></button>
+        <button class="nav-item" data-page="investments">◆ <span>Carteira</span></button>
         <button class="nav-item" data-page="family">♧ <span>Família</span></button>
       </nav>
       <div class="sidebar-bottom"><span id="sideUser" class="tiny"></span><button id="logoutBtn" class="text-button">Sair da conta ↗</button></div>
@@ -58,6 +59,8 @@
       <section id="budgetsPage" class="page hidden"><div class="section-head"><div><h3>Orçamento familiar</h3><p class="muted">Um orçamento comum, com limites por categoria e integrante.</p></div><button class="primary" id="newBudget">＋ Definir limite</button></div><div id="budgetsList" class="budget-list"></div></section>
 
       <section id="insightsPage" class="page hidden"><div class="section-head"><div><h3>Vilões financeiros</h3><p class="muted">Categorias que mais consomem o orçamento no mês.</p></div></div><div id="insightsContent" class="panel empty-state">Registre despesas para começarmos a identificar os maiores gastos.</div><div class="notice">A classificação de supérfluos por item de nota fiscal, comparação entre supermercados e recomendações com IA entrarão na etapa de leitura inteligente de notas.</div></section>
+
+      <section id="investmentsPage" class="page hidden"><div class="section-head"><div><h3>Investimentos</h3><p class="muted">Carteira e saldos das contas conectadas.</p></div></div><div id="investmentsContent"></div></section>
 
       <section id="familyPage" class="page hidden"><div class="section-head"><div><h3>Família e acessos</h3><p class="muted">Gerencie os integrantes e seus perfis.</p></div></div><div class="panel"><h3>Seu núcleo familiar</h3><div id="familyInfo" class="family-list"></div><hr><h3>Convidar integrante</h3><p class="muted">Crie o acesso do familiar pelo botão “Criar acesso” na tela inicial. Para associar um novo acesso à família, o administrador deverá enviar um convite (recurso da próxima etapa).</p></div><div class="panel"><h3>Pessoas para reconhecer transferências</h3><p class="muted">Quando o nome aparecer num Pix ou transferência, o app sugere “transferência entre contas da família” (não conta como despesa). Os integrantes já entram automaticamente.</p><div id="aliasList"></div><form id="aliasForm" class="button-row"><input id="aliasName" required maxlength="80" placeholder="Ex.: Graziela"><button class="secondary" type="submit">Adicionar nome</button></form></div></section>
     </main>

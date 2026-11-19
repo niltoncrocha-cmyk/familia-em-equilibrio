@@ -99,7 +99,7 @@ Deno.serve(async (req) => {
       .map(norm).map((x) => x.trim()).filter((x) => x.length >= 3);
 
     const key = await pluggyKey();
-    let newAccounts = 0, newTransactions = 0, checkedAccounts = 0, fetchedTransactions = 0;
+    let newAccounts = 0, newTransactions = 0, checkedAccounts = 0, fetchedTransactions = 0, investmentsCount = 0;
     const errors = [];
     const details = [];
 
@@ -210,6 +210,50 @@ Deno.serve(async (req) => {
         }
       }
 
+      // Investimentos do item (não derruba a sincronização se o banco não compartilhar esse tipo de dado).
+      try {
+        const inv = [];
+        for (let page = 1, total = 1; page <= total && page <= 10; page++) {
+          const res = await pluggyGet(`/investments?itemId=${encodeURIComponent(c.item_id)}&pageSize=500&page=${page}`, key);
+          total = res.totalPages ?? 1;
+          inv.push(...(res.results ?? []));
+        }
+        const num = (v) => (v === null || v === undefined || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+        const day = (v) => (v ? String(v).slice(0, 10) : null);
+        const rowsInv = inv.map((i) => ({
+          family_id: family,
+          item_id: c.item_id,
+          external_id: i.id,
+          name: String(i.name || i.code || 'Investimento').slice(0, 160),
+          type: i.type ?? null,
+          subtype: i.subtype ?? null,
+          institution: i.institution?.name ?? c.institution ?? null,
+          issuer: i.issuer ?? null,
+          balance: num(i.balance) ?? num(i.value) ?? 0,
+          amount_invested: num(i.amountOriginal) ?? num(i.amount),
+          profit: num(i.amountProfit),
+          annual_rate: num(i.annualRate) ?? num(i.fixedAnnualRate),
+          quantity: num(i.quantity),
+          currency: i.currencyCode || 'BRL',
+          due_date: day(i.dueDate),
+          reference_date: day(i.date),
+          updated_at: new Date().toISOString(),
+        }));
+        for (const part of chunk(rowsInv, 200)) {
+          const { error } = await sb.from('investments').upsert(part.map((r) => ({ ...r, created_by: uid })), { onConflict: 'family_id,external_id' });
+          if (error) throw error;
+        }
+        investmentsCount += rowsInv.length;
+        // remove o que não existe mais nesse item
+        const keep = rowsInv.map((r) => r.external_id);
+        let del = sb.from('investments').delete().eq('family_id', family).eq('item_id', c.item_id);
+        if (keep.length) del = del.not('external_id', 'in', `(${keep.join(',')})`);
+        await del;
+        details.push(`${c.institution || 'Banco'} (${c.item_id.slice(0, 8)}): ${rowsInv.length} investimento(s)`);
+      } catch (e) {
+        details.push(`${c.institution || 'Banco'} (${c.item_id.slice(0, 8)}): investimentos indisponíveis (${String(e?.message || e).slice(0, 120)})`);
+      }
+
       // Nome do banco (só se ainda não houver) e data da sincronização.
       let institution = c.institution;
       if (!institution) {
@@ -245,7 +289,7 @@ Deno.serve(async (req) => {
       }
     } catch (_) { /* pareamento é um extra: não derruba a sincronização */ }
 
-    return json({ paired_transfers: pairedTransfers, accounts: newAccounts, new_transactions: newTransactions, checked_accounts: checkedAccounts, fetched_transactions: fetchedTransactions, errors, details });
+    return json({ investments: investmentsCount, paired_transfers: pairedTransfers, accounts: newAccounts, new_transactions: newTransactions, checked_accounts: checkedAccounts, fetched_transactions: fetchedTransactions, errors, details });
   } catch (err) {
     return json({ error: err?.message || 'Erro inesperado na sincronização.' }, 500);
   }
