@@ -10,7 +10,7 @@ const money = n => new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL
 const today = () => new Date().toISOString().slice(0,10);
 const month = () => today().slice(0,7);
 const monthName = new Intl.DateTimeFormat('pt-BR',{month:'long',year:'numeric'}).format(new Date());
-let client=null, session=null, family=null, members=[], categories=[], accounts=[], transactions=[], budgets=[], connections=[], reviews=[], aliases=[];
+let client=null, session=null, family=null, members=[], categories=[], accounts=[], transactions=[], budgets=[], connections=[], reviews=[], aliases=[], history=[];
 const fallbackCategories = [
  ['Moradia','expense','fixed'],['Alimentação','expense','variable'],['Supermercado','expense','variable'],['Restaurantes e delivery','expense','variable'],['Transporte e combustível','expense','variable'],['Saúde e farmácia','expense','variable'],['Educação','expense','fixed'],['Lazer','expense','variable'],['Vestuário','expense','variable'],['Assinaturas','expense','fixed'],['Contas da casa','expense','fixed'],['Impostos e taxas','expense','fixed'],['Outros gastos','expense','variable'],['Salário','income','income'],['Renda extra','income','income'],['Investimentos e rendimentos','income','income'],['Outras receitas','income','income']
 ];
@@ -29,7 +29,7 @@ $('authForm').addEventListener('submit',async e=>{e.preventDefault();if(!configu
 $('signupBtn').onclick=async()=>{if(!configured){message('authMessage','Configure primeiro a URL e a chave pública do Supabase no app.js.');return}const {data,error}=await client.auth.signUp({email:$('authEmail').value,password:$('authPassword').value});if(error){message('authMessage',error.message);return}message('authMessage',data.session?'Acesso criado. Entre para continuar.':'Acesse seu e-mail para confirmar o cadastro e depois entre.');};
 async function boot(){showApp();$('sideUser').textContent=session.user.email;try{await loadFamily();await loadAll()}catch(e){toast('Não foi possível carregar os dados: '+e.message)}}
 async function loadFamily(){let {data,error}=await client.from('family_members').select('family_id,role,display_name').eq('user_id',session.user.id).eq('active',true).maybeSingle();if(error)throw error;if(!data){$('familyInfo').innerHTML='<p class="muted">Seu usuário ainda não está vinculado a uma família. Execute a função de configuração inicial descrita no README ou peça ao administrador para concluir o cadastro.</p>';return}family=data.family_id;}
-async function loadAll(){if(!family){renderFamily();return}const [m,c,a,t,b,cn,rv,al]=await Promise.all([
+async function loadAll(){if(!family){renderFamily();return}const [m,c,a,t,b,cn,rv,al,hs]=await Promise.all([
  client.from('family_members').select('user_id,display_name,role').eq('family_id',family).eq('active',true),
  client.from('categories').select('*').or(`family_id.eq.${family},family_id.is.null`).order('name'),
  client.from('financial_accounts').select('*').eq('family_id',family).eq('active',true).order('name'),
@@ -37,8 +37,9 @@ async function loadAll(){if(!family){renderFamily();return}const [m,c,a,t,b,cn,r
  client.from('budgets').select('*,categories(name)').eq('family_id',family).eq('month',month()+'-01'),
  client.from('bank_connections').select('id,institution,last_synced_at').eq('family_id',family).order('created_at'),
  client.from('bank_import_review').select('*').eq('family_id',family).eq('review_status','pending').order('transaction_date',{ascending:false}).limit(200),
- client.from('family_aliases').select('id,name').eq('family_id',family).order('name')
- ]);for(const r of [m,c,a,t,b])if(r.error)throw r.error;members=m.data||[];categories=c.data||[];accounts=a.data||[];transactions=t.data||[];budgets=b.data||[];connections=cn.error?[]:(cn.data||[]);reviews=rv.error?[]:(rv.data||[]);aliases=al.error?[]:(al.data||[]);renderAll()}
+ client.from('family_aliases').select('id,name').eq('family_id',family).order('name'),
+ client.from('transactions').select('description,counterparty,amount,type,category_id,movement_kind,occurred_on,source').eq('family_id',family).order('occurred_on',{ascending:false}).limit(3000)
+ ]);for(const r of [m,c,a,t,b])if(r.error)throw r.error;members=m.data||[];categories=c.data||[];accounts=a.data||[];transactions=t.data||[];budgets=b.data||[];connections=cn.error?[]:(cn.data||[]);reviews=rv.error?[]:(rv.data||[]);aliases=al.error?[]:(al.data||[]);history=hs.error?[]:(hs.data||[]);renderAll()}
 function renderAll(){renderAliases();renderDashboard();renderTransactions();renderAccounts();renderBudgets();renderFamily();fillCategories();renderBank()}
 const PM={pix:'Pix',cartao_credito:'Cartão de crédito',cartao_debito:'Cartão de débito',boleto:'Boleto',ted_doc:'TED/DOC',dinheiro:'Dinheiro',outro:'Outro'};
 const KIND={normal:'Despesa ou receita normal',transfer:'Transferência entre contas da família',card_bill:'Pagamento de fatura do cartão',donation:'Doação / oferta (conta como despesa)'};
@@ -69,12 +70,34 @@ function formatDate(d){return new Intl.DateTimeFormat('pt-BR').format(new Date(d
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 /* ---- Conexão bancária (MeuPluggy / Pluggy) ---- */
 function accountName(id){return accounts.find(a=>a.id===id)?.name||'Conta importada'}
-function catOptions(type){return categories.filter(c=>c.kind===(type==='income'?'income':'expense')).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')+'<option value="__new__">＋ Nova categoria…</option>'}
+function catOptions(type,sel){return categories.filter(c=>c.kind===(type==='income'?'income':'expense')).map(c=>`<option value="${c.id}"${c.id===sel?' selected':''}>${esc(c.name)}</option>`).join('')+'<option value="__new__">＋ Nova categoria…</option>'}
+
+// Aprendizado pelo histórico: lançamentos parecidos já classificados sugerem categoria e tipo de movimento.
+const STOP=new Set(['pix','compra','cartao','debito','credito','pagamento','pgto','transferencia','transf','recebida','recebido','enviada','enviado','com','para','por','ltda','eireli','sa','the','nubank','bradesco']);
+function words(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z ]/g,' ').split(/\s+/).filter(w=>w.length>2&&!STOP.has(w))}
+let learnMap=null,learnSize=-1;
+function learn(){if(learnMap&&learnSize===history.length)return learnMap;learnMap={};learnSize=history.length;
+  for(const h of history){const cat=h.category_id||null,kind=h.movement_kind||'normal';if(!cat&&kind==='normal')continue;
+    const w=words(h.description);
+    for(let n=1;n<=3&&n<=w.length;n++){const k=n+':'+w.slice(0,n).join(' ');const e=learnMap[k]||(learnMap[k]={n:0,cats:{},kinds:{}});e.n++;if(cat)e.cats[cat]=(e.cats[cat]||0)+1;e.kinds[kind]=(e.kinds[kind]||0)+1}}
+  return learnMap}
+function suggestFor(r){const m=learn();const w=words(r.description);
+  for(let n=Math.min(3,w.length);n>=1;n--){const e=m[n+':'+w.slice(0,n).join(' ')];if(!e||(n===1&&(e.n<2||w[0].length<5)))continue;
+    const top=o=>Object.entries(o).sort((x,y)=>y[1]-x[1])[0];const c=top(e.cats),k=top(e.kinds);
+    return {cat:c?c[0]:null,kind:k?k[0]:'normal',count:e.n}}
+  return null}
+// Aviso de duplicidade: lançamento manual (ou de nota) com mesmo valor e data próxima (até 2 dias).
+function dupOf(r){const t=r.suggested_type||'expense';return history.find(h=>h.source!=='bank_import'&&h.type===t&&Number(h.amount)===Number(r.amount)&&Math.abs(new Date(h.occurred_on)-new Date(r.transaction_date))<=2*864e5)}
 function renderBank(){
   const list=$('connectionsList');if(!list)return;
   list.innerHTML=connections.length?connections.map(c=>`<div class="tx-row"><div><strong>${esc(c.institution||'Banco conectado')}</strong><small>${c.last_synced_at?'Última sincronização: '+esc(new Date(c.last_synced_at).toLocaleString('pt-BR')):'Ainda não sincronizado'}</small></div></div>`).join(''):'<p class="muted">Nenhum banco conectado ainda.</p>';
   $('syncBank').disabled=!connections.length;
-  $('reviewList').innerHTML=reviews.length?reviews.map(r=>{const type=r.suggested_type||'expense';return `<div class="tx-row" data-review="${r.id}" style="flex-wrap:wrap;gap:8px"><div><strong>${esc(r.description)}</strong><small>${formatDate(r.transaction_date)} · ${esc(accountName(r.account_id))}${r.payment_method?' · '+esc(PM[r.payment_method]||r.payment_method):''}${r.counterparty?' · '+esc(r.counterparty):''}</small></div><strong class="${type==='income'?'positive':'negative'}">${money(r.amount)}</strong><div class="button-row" style="width:100%"><select class="rv-type"><option value="expense"${type==='expense'?' selected':''}>Despesa</option><option value="income"${type==='income'?' selected':''}>Receita</option></select><select class="rv-kind">${Object.entries(KIND).map(([k,v])=>`<option value="${k}"${(r.suggested_movement||'normal')===k?' selected':''}>${v}</option>`).join('')}</select><select class="rv-cat"${(r.suggested_movement||'normal')!=='normal'?' style="display:none"':''}>${catOptions(type)}</select><button class="primary compact" type="button" data-act="approve">Aprovar</button><button class="secondary compact" type="button" data-act="reject">Ignorar</button></div></div>`}).join(''):'<div class="empty-state">Nenhum lançamento aguardando revisão.</div>';
+  $('reviewList').innerHTML=reviews.length?reviews.map(r=>{const type=r.suggested_type||'expense',sug=suggestFor(r),dup=dupOf(r);
+    const kind=r.suggested_movement||(sug&&sug.kind)||'normal';const catOk=sug&&sug.cat&&categories.some(c=>c.id===sug.cat&&c.kind===(type==='income'?'income':'expense'))?sug.cat:null;
+    return `<div class="tx-row" data-review="${r.id}" style="flex-wrap:wrap;gap:8px${dup?';border-left:3px solid #c5a45b;padding-left:8px':''}"><div><strong>${esc(r.description)}</strong><small>${formatDate(r.transaction_date)} · ${esc(accountName(r.account_id))}${r.payment_method?' · '+esc(PM[r.payment_method]||r.payment_method):''}${r.counterparty?' · '+esc(r.counterparty):''}</small></div><strong class="${type==='income'?'positive':'negative'}">${money(r.amount)}</strong>
+      ${dup?`<div class="notice" style="width:100%;margin:0">⚠ Possível duplicado: já existe “${esc(dup.description)}” de ${money(dup.amount)} em ${formatDate(dup.occurred_on)}, lançado por você. Se for a mesma despesa, toque em <strong>Ignorar</strong>.</div>`:''}
+      ${sug&&(catOk||kind!=='normal')&&!r.suggested_movement?`<small class="muted" style="width:100%">Sugerido pelo histórico (${sug.count} lançamento${sug.count>1?'s':''} parecido${sug.count>1?'s':''}).</small>`:''}
+      <div class="button-row" style="width:100%"><select class="rv-type"><option value="expense"${type==='expense'?' selected':''}>Despesa</option><option value="income"${type==='income'?' selected':''}>Receita</option></select><select class="rv-kind">${Object.entries(KIND).map(([k,v])=>`<option value="${k}"${kind===k?' selected':''}>${v}</option>`).join('')}</select><select class="rv-cat"${kind!=='normal'?' style="display:none"':''}>${catOptions(type,catOk)}</select><button class="primary compact" type="button" data-act="approve">Aprovar</button><button class="secondary compact" type="button" data-act="reject">Ignorar</button></div></div>`}).join(''):'<div class="empty-state">Nenhum lançamento aguardando revisão.</div>';
 }
 async function approveReview(row){
   const r=reviews.find(x=>x.id===row.dataset.review);if(!r)return;
@@ -91,7 +114,7 @@ async function rejectReview(row){
   await loadAll();toast('Lançamento ignorado.');
 }
 $('reviewList').addEventListener('click',async e=>{const b=e.target.closest('button[data-act]');if(!b)return;const row=b.closest('[data-review]');b.disabled=true;try{await(b.dataset.act==='approve'?approveReview(row):rejectReview(row))}catch(err){toast(err.message);b.disabled=false}});
-$('reviewList').addEventListener('change',e=>{const row=e.target.closest('[data-review]');if(e.target.classList.contains('rv-type'))row.querySelector('.rv-cat').innerHTML=catOptions(e.target.value);if(e.target.classList.contains('rv-kind'))row.querySelector('.rv-cat').style.display=e.target.value==='normal'?'':'none'});
+$('reviewList').addEventListener('change',e=>{const row=e.target.closest('[data-review]');if(e.target.classList.contains('rv-type'))row.querySelector('.rv-cat').innerHTML=catOptions(e.target.value,null);if(e.target.classList.contains('rv-kind'))row.querySelector('.rv-cat').style.display=e.target.value==='normal'?'':'none'});
 $('connectManual').onclick=()=>{$('itemId').value='';$('itemName').value='';message('connectMessage','');openDialog('connectDialog')};
 $('connectForm').onsubmit=async e=>{e.preventDefault();try{const item=$('itemId').value.trim();if(!/^[0-9a-f-]{36}$/i.test(item))throw new Error('Item ID inválido. Copie o código novamente no app de demonstração da Pluggy.');const {error}=await client.from('bank_connections').insert({family_id:family,provider:'pluggy',item_id:item,institution:$('itemName').value.trim()||null,created_by:session.user.id});if(error)throw error;closeDialog('connectDialog');await loadAll();toast('Banco conectado. Toque em Sincronizar agora.')}catch(err){message('connectMessage',err.message)}};
 $('syncBank').onclick=async()=>{const btn=$('syncBank');btn.disabled=true;btn.textContent='Sincronizando…';$('syncResult').textContent='';try{const {data,error}=await client.functions.invoke('pluggy-sync');if(error){let msg=error.message;try{const j=await error.context.json();msg=j.error||msg}catch(_){}throw new Error(msg)}await loadAll();
