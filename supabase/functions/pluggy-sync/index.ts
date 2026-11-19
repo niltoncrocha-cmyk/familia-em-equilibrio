@@ -131,14 +131,14 @@ Deno.serve(async (req) => {
         try {
         checkedAccounts++;
         const txs = [];
-        let page = 1, totalPages = 1;
-        do {
-          const res = await pluggyGet(
-            `/transactions?accountId=${encodeURIComponent(a.id)}&from=${from}&to=${to}&pageSize=500&page=${page}`, key);
-          totalPages = res.totalPages ?? 1;
+        // Endpoint atual da Pluggy (o /transactions antigo foi descontinuado): paginação por cursor "next".
+        let path = `/v2/transactions?accountId=${encodeURIComponent(a.id)}&dateFrom=${from}&dateTo=${to}`;
+        for (let guard = 0; path && guard < 40; guard++) {
+          const res = await pluggyGet(path, key);
           for (const t of res.results ?? []) if (t.status !== 'PENDING' && Number(t.amount) !== 0) txs.push(t);
-          page++;
-        } while (page <= totalPages);
+          const next = res.next;
+          path = next ? (String(next).startsWith('/') ? String(next) : `/v2/transactions${String(next).startsWith('?') ? '' : '?'}${next}`) : '';
+        }
         fetchedTransactions += txs.length;
         details.push(`${String(a.marketingName || a.name || 'conta').slice(0, 20)} (saldo ${a.balance ?? '?'}): ${txs.length} lanç.`);
         if (!txs.length) continue;
