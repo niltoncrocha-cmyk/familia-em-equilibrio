@@ -1,0 +1,10 @@
+{
+  "appId": "br.com.familiaequilibrio.app",
+  "appName": "Família em Equilíbrio",
+  "webDir": "www",
+  "server": {
+    "url": "https://niltoncrocha-cmyk.github.io/familia-em-equilibrio/",
+    "cleartext": false
+  },
+  "android": { "allowMixedContent": false }
+}
