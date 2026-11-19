@@ -38,3 +38,9 @@
     padding-bottom:110px;
   }
 }
+
+@media(max-width:760px){
+  .sidebar nav{overflow-x:auto;justify-content:flex-start;scrollbar-width:none}
+  .sidebar nav::-webkit-scrollbar{display:none}
+  .nav-item{flex:0 0 auto;min-width:62px;padding:5px 6px}
+}

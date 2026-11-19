@@ -21,7 +21,7 @@ function showApp(){ $('authView').classList.add('hidden');$('appView').classList
 function openDialog(id){$(id).showModal()}
 function closeDialog(id){$(id).close()}
 document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',()=>closeDialog(b.dataset.close)));
-function navigate(page){document.querySelectorAll('.page').forEach(p=>p.classList.add('hidden'));$(page+'Page').classList.remove('hidden');document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===page));$('pageTitle').textContent=({dashboard:'Visão geral',transactions:'Lançamentos',cards:'Contas e cartões',budgets:'Orçamentos',insights:'Vilões financeiros',investments:'Investimentos',family:'Família'})[page]||'Visão geral';if(page==='insights')renderInsights()}
+function navigate(page){document.querySelectorAll('.page').forEach(p=>p.classList.add('hidden'));$(page+'Page').classList.remove('hidden');document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===page));$('pageTitle').textContent=({dashboard:'Visão geral',transactions:'Lançamentos',cards:'Contas e cartões',budgets:'Orçamentos',insights:'Vilões financeiros',investments:'Investimentos',months:'Meses e comparativo',family:'Família'})[page]||'Visão geral';if(page==='insights')renderInsights()}
 document.querySelectorAll('.nav-item').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.page)));
 document.querySelectorAll('[data-goto]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.goto)));
 $('quickAdd').onclick=$('newTransaction').onclick=()=>{prepareTransactionForm();openDialog('transactionDialog')};$('newAccount').onclick=()=>{prepareMemberSelect('accountOwner');openDialog('accountDialog')};$('newBudget').onclick=()=>{prepareBudgetForm();openDialog('budgetDialog')};$('logoutBtn').onclick=async()=>{if(client)await client.auth.signOut();session=null;showAuth()};
@@ -41,7 +41,7 @@ async function loadAll(){if(!family){renderFamily();return}const [m,c,a,t,b,cn,r
  client.from('transactions').select('description,counterparty,amount,type,category_id,movement_kind,occurred_on,source').eq('family_id',family).order('occurred_on',{ascending:false}).limit(3000),
  client.from('investments').select('*').eq('family_id',family).order('balance',{ascending:false})
  ]);for(const r of [m,c,a,t,b])if(r.error)throw r.error;members=m.data||[];categories=c.data||[];accounts=a.data||[];transactions=t.data||[];budgets=b.data||[];connections=cn.error?[]:(cn.data||[]);reviews=rv.error?[]:(rv.data||[]);aliases=al.error?[]:(al.data||[]);history=hs.error?[]:(hs.data||[]);investments=iv.error?[]:(iv.data||[]);renderAll()}
-function renderAll(){renderWealth();renderInvestments();renderAliases();renderDashboard();renderTransactions();renderAccounts();renderBudgets();renderFamily();fillCategories();renderBank()}
+function renderAll(){renderMonths();renderWealth();renderInvestments();renderAliases();renderDashboard();renderTransactions();renderAccounts();renderBudgets();renderFamily();fillCategories();renderBank()}
 const PM={pix:'Pix',cartao_credito:'Cartão de crédito',cartao_debito:'Cartão de débito',boleto:'Boleto',ted_doc:'TED/DOC',dinheiro:'Dinheiro',outro:'Outro'};
 const KIND={normal:'Despesa ou receita normal',transfer:'Transferência entre contas da família',card_bill:'Pagamento de fatura do cartão',donation:'Doação / oferta (conta como despesa)',investment:'Aplicação / resgate de investimento'};
 const catName=t=>t.categories?.name||((t.movement_kind||'normal')==='donation'?'Doações e ofertas':'Sem categoria');
@@ -134,7 +134,7 @@ $('syncBank').onclick=async()=>{const btn=$('syncBank');btn.disabled=true;btn.te
   $('syncResult').textContent=[`Última sincronização às ${when}: ${data.new_transactions} novos lançamentos para revisar; a Pluggy devolveu ${data.fetched_transactions} lançamentos em ${data.checked_accounts} contas.`,...(data.errors||[]).map(x=>'⚠ '+x),...(data.details||[]).map(x=>'• '+x)].join('\n');
   toast(`Sincronizado: ${data.new_transactions} novos lançamentos para revisar.`+(data.errors?.length?' Há avisos abaixo.':''))}catch(err){$('syncResult').textContent='⚠ '+err.message;toast(err.message)}finally{btn.textContent='Sincronizar agora';btn.disabled=!connections.length}};
 if(configured&&window.supabase){client=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);client.auth.getSession().then(({data})=>{if(data.session){session=data.session;boot()}else showAuth()});client.auth.onAuthStateChange((_event,s)=>{if(s){session=s;boot()}else showAuth()})}else showAuth();
-const APP_VERSION='15';
+const APP_VERSION='16';
 if('serviceWorker'in navigator){const hadController=!!navigator.serviceWorker.controller;let reloaded=false;
   navigator.serviceWorker.addEventListener('controllerchange',()=>{if(hadController&&!reloaded){reloaded=true;location.reload()}});
   window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(r=>r.update()).catch(()=>{}))}
@@ -233,3 +233,39 @@ function renderWealth(){const el=$('wealthPanel');if(!el)return;
    <h4>Investimentos</h4>${Object.entries(invByType).sort((x,y)=>y[1]-x[1]).map(([n,v])=>row(n,v)).join('')||'<p class="muted tiny">Nenhum investimento importado.</p>'}
    <h4>Cartões em aberto</h4>${cards.list.map(({a,shared})=>row(a.name,a.balance,shared?'mesmo limite e valor de outro cartão: contado uma vez':(a.credit_limit?'limite '+money(a.credit_limit):''))).join('')||'<p class="muted tiny">Sem cartões com saldo.</p>'}
    <p class="tiny muted">Valores informados pelos bancos${(()=>{const d=[...accounts.map(a=>a.balance_updated_at),...investments.map(i=>i.updated_at)].filter(Boolean).sort().pop();return d?' em '+new Date(d).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):''})()}. Se um investimento (como o Rende Fácil) já estiver somado no saldo da conta, o total pode ficar maior que o real.</p></details>`}
+
+// Aba Meses: histórico de qualquer mês e comparativo mês a mês (receitas, despesas e economia).
+// Conta como receita/despesa o mesmo que o painel: movimentos normais e doações (transferências, faturas e aplicações ficam de fora).
+let monthsSel=null;
+const MONTH_FULL=k=>new Date(k+'-15T12:00:00').toLocaleDateString('pt-BR',{month:'long',year:'numeric'});
+const MONTH_SHORT=k=>new Date(k+'-15T12:00:00').toLocaleDateString('pt-BR',{month:'short',year:'2-digit'}).replace('.','');
+const shiftMonth=(k,n)=>{const d=new Date(k+'-15T12:00:00');d.setMonth(d.getMonth()+n);return d.toISOString().slice(0,7)};
+function catLabel(t){return t.category_id?(categories.find(c=>c.id===t.category_id)?.name||'Sem categoria'):(t.movement_kind==='donation'?'Doações e ofertas':'Sem categoria')}
+function monthAgg(){const m={};for(const t of history){if(!['normal','donation'].includes(t.movement_kind||'normal'))continue;const k=String(t.occurred_on).slice(0,7),o=m[k]||(m[k]={income:0,expense:0,cats:{},list:[]}),v=Number(t.amount)||0;
+    if(t.type==='income')o.income+=v;else{o.expense+=v;const c=catLabel(t);o.cats[c]=(o.cats[c]||0)+v;o.list.push(t)}}
+  return m}
+function renderMonths(){const box=$('monthsContent');if(!box)return;
+  const cur=month();if(!monthsSel)monthsSel=cur;const agg=monthAgg(),sel=monthsSel,prev=shiftMonth(sel,-1);
+  const g=k=>agg[k]||{income:0,expense:0,cats:{},list:[]},S=g(sel),P=g(prev);
+  const save=S.income-S.expense,rate=S.income>0?save/S.income*100:null,pctTxt=v=>v==null?'—':v.toLocaleString('pt-BR',{maximumFractionDigits:0})+'%';
+  const diff=(now,before)=>{const d=now-before;if(!before&&!now)return '—';const p=before?` (${d>=0?'+':''}${(d/before*100).toLocaleString('pt-BR',{maximumFractionDigits:0})}%)`:'';return `${d>=0?'+':'−'} ${money(Math.abs(d))}${p}`};
+  const metric=(t,v,s,cls)=>`<article class="metric ${cls||''}"><span>${t}</span><strong>${v}</strong><small>${s}</small></article>`;
+  // últimos 12 meses terminando no mês escolhido
+  const seq=[];for(let i=11;i>=0;i--)seq.push(shiftMonth(sel,-i));
+  const maxV=Math.max(1,...seq.map(k=>Math.max(g(k).income,g(k).expense)));
+  const rows=seq.slice().reverse().map(k=>{const x=g(k),sv=x.income-x.expense,r=x.income>0?sv/x.income*100:null,has=x.income||x.expense;
+    return `<tr data-m="${k}" style="cursor:pointer${k===sel?';background:#1d5a4315':''}"><td>${esc(MONTH_SHORT(k))}</td><td>${has?money(x.income):'—'}</td><td>${has?money(x.expense):'—'}</td><td class="${sv>=0?'positive':'negative'}">${has?money(sv):'—'}</td><td>${has?pctTxt(r):'—'}</td></tr>`}).join('');
+  const bars=seq.map(k=>{const x=g(k);return `<div style="flex:1;min-width:0;text-align:center" data-m="${k}"><div style="height:90px;display:flex;align-items:flex-end;justify-content:center;gap:2px"><div title="Receitas" style="width:40%;background:#1d5a43;height:${Math.max(x.income?3:0,x.income/maxV*100)}%"></div><div title="Despesas" style="width:40%;background:#b64d43;height:${Math.max(x.expense?3:0,x.expense/maxV*100)}%"></div></div><small style="font-size:9px;${k===sel?'font-weight:700':''}">${esc(MONTH_SHORT(k).split(' ')[0])}</small></div>`}).join('');
+  const cats=[...new Set([...Object.keys(S.cats),...Object.keys(P.cats)])].sort((x,y)=>(S.cats[y]||0)-(S.cats[x]||0));
+  const catRows=cats.map(c=>{const n=S.cats[c]||0,p=P.cats[c]||0,d=n-p;return `<tr><td>${esc(c)}</td><td>${n?money(n):'—'}</td><td>${p?money(p):'—'}</td><td class="${d>0?'negative':d<0?'positive':''}">${d?(d>0?'+ ':'− ')+money(Math.abs(d)):'—'}</td></tr>`}).join('');
+  const top=S.list.slice().sort((x,y)=>Number(y.amount)-Number(x.amount)).slice(0,15).map(t=>`<div class="tx-row"><div><strong>${esc(t.description)}</strong><small>${esc(catLabel(t))} · ${formatDate(t.occurred_on)}</small></div><strong class="negative">− ${money(t.amount)}</strong></div>`).join('');
+  box.innerHTML=`<div class="button-row" style="margin-bottom:12px;align-items:center"><button class="secondary compact" type="button" data-m="${prev}">◀</button><input type="month" id="monthsPick" value="${sel}" max="${cur}" style="flex:1;min-width:0"><button class="secondary compact" type="button" data-m="${shiftMonth(sel,1)}"${sel>=cur?' disabled':''}>▶</button></div>
+  <h3 style="text-transform:capitalize;margin:4px 0 12px">${esc(MONTH_FULL(sel))}</h3>
+  <div class="metric-grid">${metric('Receitas',money(S.income),'Comparado a '+MONTH_SHORT(prev)+': '+diff(S.income,P.income))}${metric('Despesas',money(S.expense),'Comparado a '+MONTH_SHORT(prev)+': '+diff(S.expense,P.expense))}${metric('Economia do mês',money(save),'Receitas menos despesas',save>=0?'highlight':'')}${metric('Taxa de economia',pctTxt(rate),'Meta: 20%'+(rate==null?'':rate>=20?' · meta atingida':' · abaixo da meta'))}</div>
+  <article class="panel"><div class="panel-heading"><div><h3>Mês a mês</h3><p class="muted">Receitas (verde) e despesas (vermelho) dos últimos 12 meses. Toque num mês para abrir.</p></div></div><div style="display:flex;gap:2px;align-items:flex-end;margin-bottom:12px">${bars}</div>
+   <div class="table-wrap"><table class="data-table"><thead><tr><th>Mês</th><th>Receitas</th><th>Despesas</th><th>Economia</th><th>Taxa</th></tr></thead><tbody>${rows}</tbody></table></div></article>
+  <article class="panel"><div class="panel-heading"><div><h3>Categorias: ${esc(MONTH_SHORT(sel))} × ${esc(MONTH_SHORT(prev))}</h3><p class="muted">Vermelho: gastou mais que no mês anterior. Verde: gastou menos.</p></div></div>${cats.length?`<div class="table-wrap"><table class="data-table"><thead><tr><th>Categoria</th><th>${esc(MONTH_SHORT(sel))}</th><th>${esc(MONTH_SHORT(prev))}</th><th>Diferença</th></tr></thead><tbody>${catRows}</tbody></table></div>`:'<div class="empty-state">Sem despesas nesses meses.</div>'}</article>
+  <article class="panel"><div class="panel-heading"><div><h3>Maiores despesas do mês</h3></div></div>${top||'<div class="empty-state">Nenhuma despesa neste mês.</div>'}</article>
+  <p class="tiny muted">Não entram: transferências entre contas da família, pagamentos de fatura e aplicações/resgates. Doações contam como despesa.${history.length>=3000?' O histórico considera os últimos 3.000 lançamentos.':''}</p>`}
+$('monthsContent').addEventListener('click',e=>{const b=e.target.closest('[data-m]');if(!b||b.disabled)return;monthsSel=b.dataset.m;renderMonths();window.scrollTo({top:0})});
+$('monthsContent').addEventListener('change',e=>{if(e.target.id==='monthsPick'&&e.target.value){monthsSel=e.target.value;renderMonths()}});
