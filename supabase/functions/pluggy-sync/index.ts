@@ -1,5 +1,5 @@
 // Sincroniza contas e lançamentos da Pluggy (MeuPluggy) para a fila de revisão da família.
-// Roda com a identidade do usuário (JWT): as regras de acesso (RLS) do banco continuam valendo.
+// Manual: roda com a identidade do usuário (JWT), com as regras de acesso (RLS). Agendado: segredo guardado em app_secrets + service role (verify_jwt desligado; a função valida sozinha).
 // Segredos necessários (Supabase → Edge Functions → Secrets): PLUGGY_CLIENT_ID e PLUGGY_CLIENT_SECRET.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
@@ -35,9 +35,9 @@ function payMethod(t, isCard) {
 // Sugestão de tipo de movimento (a pessoa sempre confirma na revisão).
 function suggestMovement(text, aliases, isCard, credit) {
   const n = norm(text);
-  if (/(pagamento|pgto|pag)\s*(de\s*)?fatura|fatura\s*(do\s*)?cart|pagamento recebido|pagamento efetuado/.test(n)) return 'card_bill';
+  if (/(pagamento|pgto|pag)\s*(de\s*)?fatura|fatura\s*(do\s*)?cart|pagamento recebido|pagamento efetuado|gastos\s*cartao\s*de\s*credito|pagto\.?\s*por\s*deb|pgto\s*cartao/.test(n)) return 'card_bill';
   // Aplicação/resgate automático (ex.: BB Rende Fácil): dinheiro que só muda de lugar, não é gasto nem ganho.
-  if (/rende\s*facil|aplicacao\s*automatica|resgate\s*automatico|aplic\w*\s*(em\s*|de\s*)?(auto|invest|cdb|fundo|poupanca)|resg\w*\s*(em\s*|de\s*)?(auto|invest|cdb|fundo|poupanca)|\b(apl|resg)\.?\s*aut/.test(n)) return 'investment';
+  if (/rend\w*[\s.]*facil|(resgate|aplicacao)\s*(rdb|cdb|lci|lca)|aplicacao\s*automatica|resgate\s*automatico|aplic\w*\s*(em\s*|de\s*)?(auto|invest|cdb|fundo|poupanca)|resg\w*\s*(em\s*|de\s*)?(auto|invest|cdb|fundo|poupanca)|\b(apl|resg)\.?\s*aut/.test(n)) return 'investment';
   if (/doacao|dizimo|oferta/.test(n)) return 'donation';
   if (aliases.some((a) => n.includes(a))) return 'transfer';
   return null;
@@ -72,27 +72,13 @@ async function pluggyGet(path, key) {
   return r.json();
 }
 
-Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
-  try {
-    const sb = createClient(Deno.env.get('SUPABASE_URL'), Deno.env.get('SUPABASE_ANON_KEY'), {
-      global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } },
-    });
-    const { data: u, error: ue } = await sb.auth.getUser();
-    if (ue || !u?.user) return json({ error: 'Não autenticado.' }, 401);
-    const uid = u.user.id;
+async function syncFamily(sb, uid, displayName, family) {
 
-    const { data: fm, error: fe } = await sb
-      .from('family_members').select('family_id,display_name')
-      .eq('user_id', uid).eq('active', true).maybeSingle();
-    if (fe) throw fe;
-    if (!fm) return json({ error: 'Usuário sem família vinculada.' }, 400);
-    const family = fm.family_id;
 
     const { data: conns, error: ce } = await sb
       .from('bank_connections').select('id,item_id,institution,last_synced_at').eq('family_id', family);
     if (ce) throw ce;
-    if (!conns?.length) return json({ error: 'Nenhum banco conectado. Use "Conectar banco" primeiro.' }, 400);
+    if (!conns?.length) return { error: 'Nenhum banco conectado. Use "Conectar banco" primeiro.' };
 
     // Nomes que indicam transferência dentro da família (pessoas cadastradas + integrantes).
     const { data: al } = await sb.from('family_aliases').select('name').eq('family_id', family);
@@ -128,7 +114,7 @@ Deno.serve(async (req) => {
         name: String(a.marketingName || a.name || 'Conta').slice(0, 80) + (a.type === 'CREDIT' && a.number ? ` •••• ${a.number}` : ''),
         account_type: a.type === 'CREDIT' ? 'credit_card' : 'bank_account',
         owner_user_id: uid,
-        owner_name: fm.display_name,
+        owner_name: displayName,
         scope: 'individual',
         credit_limit: a.creditData?.creditLimit ?? null,
         balance: a.balance ?? null,
@@ -162,16 +148,17 @@ Deno.serve(async (req) => {
         try {
         checkedAccounts++;
         const txs = [];
+        let pendingSkipped = 0;
         // Endpoint atual da Pluggy (o /transactions antigo foi descontinuado): paginação por cursor "next".
         let path = `/v2/transactions?accountId=${encodeURIComponent(a.id)}&dateFrom=${from}&dateTo=${to}`;
         for (let guard = 0; path && guard < 40; guard++) {
           const res = await pluggyGet(path, key);
-          for (const t of res.results ?? []) if (t.status !== 'PENDING' && Number(t.amount) !== 0) txs.push(t);
+          for (const t of res.results ?? []) { if (t.status === 'PENDING') pendingSkipped++; else if (Number(t.amount) !== 0) txs.push(t); }
           const next = res.next;
           path = next ? (String(next).startsWith('/') ? String(next) : `/v2/transactions${String(next).startsWith('?') ? '' : '?'}${next}`) : '';
         }
         fetchedTransactions += txs.length;
-        details.push(`${String(a.marketingName || a.name || 'conta').slice(0, 20)} (saldo ${a.balance ?? '?'}): ${txs.length} lanç.`);
+        details.push(`${String(a.marketingName || a.name || 'conta').slice(0, 20)} [${a.subtype ?? a.type ?? '?'}${a.number ? ' ' + a.number : ''}] (saldo ${a.balance ?? '?'}): ${txs.length} lanç.${pendingSkipped ? ` (+${pendingSkipped} pendentes ignorados)` : ''}`);
         if (!txs.length) continue;
 
         // Não reimporta o que já está na fila de revisão (pendente, aprovado ou ignorado).
@@ -291,7 +278,45 @@ Deno.serve(async (req) => {
       }
     } catch (_) { /* pareamento é um extra: não derruba a sincronização */ }
 
-    return json({ investments: investmentsCount, paired_transfers: pairedTransfers, accounts: newAccounts, new_transactions: newTransactions, checked_accounts: checkedAccounts, fetched_transactions: fetchedTransactions, errors, details });
+    return ({ investments: investmentsCount, paired_transfers: pairedTransfers, accounts: newAccounts, new_transactions: newTransactions, checked_accounts: checkedAccounts, fetched_transactions: fetchedTransactions, errors, details });
+}
+
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
+  try {
+    // Modo agendado (pg_cron às 05:00 de Manaus): autorizado por segredo próprio, sincroniza todas as famílias com banco conectado.
+    const cronHeader = req.headers.get('x-cron-secret');
+    if (cronHeader) {
+      const admin = createClient(Deno.env.get('SUPABASE_URL'), Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'));
+      const { data: sec } = await admin.from('app_secrets').select('value').eq('name', 'cron_secret').maybeSingle();
+      if (!sec?.value || sec.value !== cronHeader) return json({ error: 'Não autorizado.' }, 401);
+      const { data: fams } = await admin.from('bank_connections').select('family_id');
+      const out = [];
+      for (const family of [...new Set((fams ?? []).map((x) => x.family_id))]) {
+        const { data: m } = await admin.from('family_members').select('user_id,display_name,role')
+          .eq('family_id', family).eq('active', true).order('role').limit(5);
+        const owner = (m ?? []).find((x) => x.role === 'admin') ?? (m ?? [])[0];
+        if (!owner) continue;
+        try { const r = await syncFamily(admin, owner.user_id, owner.display_name, family); out.push({ family, new_transactions: r.new_transactions, investments: r.investments, errors: r.errors }); }
+        catch (e) { out.push({ family, error: String(e?.message || e) }); }
+      }
+      return json({ cron: true, out });
+    }
+
+    const sb = createClient(Deno.env.get('SUPABASE_URL'), Deno.env.get('SUPABASE_ANON_KEY'), {
+      global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } },
+    });
+    const { data: u, error: ue } = await sb.auth.getUser();
+    if (ue || !u?.user) return json({ error: 'Não autenticado.' }, 401);
+    const uid = u.user.id;
+
+    const { data: fm, error: fe } = await sb
+      .from('family_members').select('family_id,display_name')
+      .eq('user_id', uid).eq('active', true).maybeSingle();
+    if (fe) throw fe;
+    if (!fm) return json({ error: 'Usuário sem família vinculada.' }, 400);
+    const r = await syncFamily(sb, uid, fm.display_name, fm.family_id);
+    return json(r, r.error ? 400 : 200);
   } catch (err) {
     return json({ error: err?.message || 'Erro inesperado na sincronização.' }, 500);
   }
