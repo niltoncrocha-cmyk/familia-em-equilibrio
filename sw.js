@@ -1,4 +1,4 @@
-const CACHE='familia-equilibrio-v20';
+const CACHE='familia-equilibrio-v21';
 const FILES=['./','./index.html','./styles.css','./app.js','./manifest.webmanifest','./assets/icon.svg','./assets/icon-192.png','./assets/icon-512.png'];
 
 self.addEventListener('install',e=>{

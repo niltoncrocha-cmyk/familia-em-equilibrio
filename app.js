@@ -41,7 +41,7 @@ async function loadAll(){if(!family){renderFamily();return}const [m,c,a,t,b,cn,r
  client.from('transactions').select('id,account_id,description,counterparty,amount,type,category_id,movement_kind,occurred_on,source').eq('family_id',family).order('occurred_on',{ascending:false}).limit(3000),
  client.from('investments').select('*').eq('family_id',family).order('balance',{ascending:false})
  ]);for(const r of [m,c,a,t,b])if(r.error)throw r.error;members=m.data||[];categories=c.data||[];accounts=a.data||[];transactions=t.data||[];budgets=b.data||[];connections=cn.error?[]:(cn.data||[]);reviews=rv.error?[]:(rv.data||[]);aliases=al.error?[]:(al.data||[]);history=hs.error?[]:(hs.data||[]);investments=iv.error?[]:(iv.data||[]);renderAll()}
-function renderAll(){renderMonths();renderWealth();renderInvestments();renderAliases();renderDashboard();renderTransactions();renderAccounts();renderBudgets();renderFamily();fillCategories();renderBank()}
+function renderAll(){snapshotInvestments();autoSync();renderMonths();renderWealth();renderInvestments();renderAliases();renderDashboard();renderTransactions();renderAccounts();renderBudgets();renderFamily();fillCategories();renderBank()}
 const PM={pix:'Pix',cartao_credito:'Cartão de crédito',cartao_debito:'Cartão de débito',boleto:'Boleto',ted_doc:'TED/DOC',dinheiro:'Dinheiro',outro:'Outro'};
 const KIND={normal:'Despesa ou receita normal',transfer:'Transferência entre contas da família',card_bill:'Pagamento de fatura do cartão',donation:'Doação / oferta (conta como despesa)',investment:'Aplicação / resgate de investimento'};
 const catName=t=>t.categories?.name||((t.movement_kind||'normal')==='donation'?'Doações e ofertas':'Sem categoria');
@@ -136,7 +136,7 @@ $('syncBank').onclick=async()=>{const btn=$('syncBank');btn.disabled=true;btn.te
   $('syncResult').textContent=[`Última sincronização às ${when}: ${data.new_transactions} novos lançamentos para revisar; a Pluggy devolveu ${data.fetched_transactions} lançamentos em ${data.checked_accounts} contas.`,...(data.errors||[]).map(x=>'⚠ '+x),...(data.details||[]).map(x=>'• '+x)].join('\n');
   toast(`Sincronizado: ${data.new_transactions} novos lançamentos para revisar.`+(data.errors?.length?' Há avisos abaixo.':''))}catch(err){$('syncResult').textContent='⚠ '+err.message;toast(err.message)}finally{btn.textContent='Sincronizar agora';btn.disabled=!connections.length}};
 if(configured&&window.supabase){client=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);client.auth.getSession().then(({data})=>{if(data.session){session=data.session;boot()}else showAuth()});client.auth.onAuthStateChange((_event,s)=>{if(s){session=s;boot()}else showAuth()})}else showAuth();
-const APP_VERSION='20';
+const APP_VERSION='21';
 if('serviceWorker'in navigator){const hadController=!!navigator.serviceWorker.controller;let reloaded=false;
   navigator.serviceWorker.addEventListener('controllerchange',()=>{if(hadController&&!reloaded){reloaded=true;location.reload()}});
   window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(r=>r.update()).catch(()=>{}))}
@@ -210,6 +210,7 @@ function renderInvestments(){const box=$('investmentsContent');if(!box)return;
   const groups={};investments.forEach(i=>{const k=i.type||'OTHER';(groups[k]=groups[k]||[]).push(i)});
   html+=Object.entries(groups).sort((x,y)=>sum(y[1],i=>i.balance)-sum(x[1],i=>i.balance)).map(([k,list])=>{const sub=sum(list,i=>i.balance);
     return `<article class="panel"><div class="panel-heading"><div><h3>${esc(INV_TYPE[k]||k)}</h3><p class="muted">${money(sub)}${total?` · ${Math.round(sub/total*100)}% da carteira`:''}</p></div></div>${list.map(i=>`<div class="tx-row"><div><strong>${esc(i.name)}</strong><small>${esc([i.institution,i.issuer&&i.issuer!==i.institution?i.issuer:null,i.annual_rate!=null?Number(i.annual_rate).toLocaleString('pt-BR',{maximumFractionDigits:2})+'% a.a.':null,i.due_date?'vence '+formatDate(i.due_date):null].filter(Boolean).join(' · '))}</small></div><strong>${money(i.balance)}</strong></div>`).join('')}</article>`}).join('');
+  html+=yieldHtml();
   html+=`<p class="tiny muted">Atualizado em ${last?new Date(last).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'}. Os valores vêm do banco via Open Finance; não entram nas receitas e despesas.</p>`;
   box.innerHTML=html}
 
@@ -329,3 +330,34 @@ document.addEventListener('click',async e=>{const b=e.target.closest('#recatTogg
   const{error}=await client.from('transactions').update({category_id:cat}).in('id',ids);if(error)return toast('Não foi possível salvar: '+error.message);
   toast(ids.length+' despesa(s) reclassificada(s).');await loadAll()});
 for(const id of ['searchTransactions','typeFilter','categoryFilter'])document.addEventListener('DOMContentLoaded',()=>{$(id)?.addEventListener('input',renderRecatBar);$(id)?.addEventListener('change',renderRecatBar)});
+
+// Rendimento: usa o histórico de saldo e cotas. Rendimento = cotas × variação do valor da cota, então aportes e resgates não distorcem.
+let snaps=[],snapBusy=false,autoSynced=false;
+async function snapshotInvestments(){if(snapBusy||!family||!investments.length)return;snapBusy=true;try{
+  const rows=investments.filter(i=>Number(i.quantity)>0&&Number(i.balance)>0&&i.reference_date).map(i=>({family_id:family,external_id:i.external_id,name:i.name,ref_date:i.reference_date,balance:i.balance,quantity:i.quantity,created_by:session.user.id}));
+  if(rows.length)await client.from('investment_snapshots').upsert(rows,{onConflict:'family_id,external_id,ref_date',ignoreDuplicates:true});
+  const{data}=await client.from('investment_snapshots').select('external_id,name,ref_date,balance,quantity').eq('family_id',family).order('ref_date');
+  snaps=data||[];renderInvestments()}catch(e){}finally{snapBusy=false}}
+// Atualiza os dados do banco sozinho ao abrir o app, se a última sincronização tiver mais de 6 horas.
+async function autoSync(){if(autoSynced||!connections.length)return;autoSynced=true;
+  const old=connections.some(c=>!c.last_synced_at||Date.now()-new Date(c.last_synced_at)>6*36e5);if(!old)return;
+  try{const{error}=await client.functions.invoke('pluggy-sync');if(!error)await loadAll()}catch(e){}}
+function yieldCalc(){const by={};for(const s of snaps)(by[s.external_id]=by[s.external_id]||[]).push(s);
+  const mk=month(),d30=new Date(Date.now()-30*864e5).toISOString().slice(0,10),res=[];
+  for(const [id,list] of Object.entries(by)){const iv=[];for(let i=1;i<list.length;i++){const p=list[i-1],c=list[i],pp=p.balance/p.quantity,cp=c.balance/c.quantity;
+      iv.push({to:c.ref_date,from:p.ref_date,base:p.quantity*pp,gain:p.quantity*(cp-pp),days:Math.max(1,Math.round((new Date(c.ref_date)-new Date(p.ref_date))/864e5))})}
+    const inv=investments.find(x=>x.external_id===id);if(!inv||!(Number(inv.balance)>0))continue;
+    const agg=f=>{const l=iv.filter(f),g=l.reduce((s,x)=>s+x.gain,0),b=l.reduce((s,x)=>s+x.base,0);return l.length?{gain:g,pct:b?g/b*100:0}:null};
+    res.push({name:inv.name,balance:Number(inv.balance),n:list.length,last:iv.length?iv[iv.length-1]:null,month:agg(x=>x.to.slice(0,7)===mk),d30:agg(x=>x.to>=d30),all:agg(()=>true),first:list[0]?.ref_date})}
+  return res}
+function yieldHtml(){const r=yieldCalc(),pc=v=>v.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+'%',cell=x=>x?`<span class="${x.gain>=0?'positive':'negative'}">${x.gain>=0?'+':'−'} ${money(Math.abs(x.gain))}</span><br><small class="muted">${pc(x.pct)}</small>`:'—';
+  const have=r.filter(x=>x.last);
+  if(!have.length)return `<article class="panel"><div class="panel-heading"><div><h3>Rendimento</h3><p class="muted">Comecei a registrar o histórico dos seus investimentos hoje. Depois da próxima atualização do banco (o app atualiza sozinho ao abrir, ou toque em <strong>Sincronizar agora</strong>), o rendimento diário e mensal aparece aqui.</p></div></div></article>`;
+  const tot=k=>{const l=have.map(x=>x[k]).filter(Boolean);if(!l.length)return null;const g=l.reduce((s,x)=>s+x.gain,0),b=l.reduce((s,x)=>s+(x.pct?x.gain/(x.pct/100):0),0);return{gain:g,pct:b?g/b*100:0}};
+  const lastT=(()=>{const l=have.map(x=>x.last);const g=l.reduce((s,x)=>s+x.gain,0),b=l.reduce((s,x)=>s+x.base,0);return{gain:g,pct:b?g/b*100:0,to:l.map(x=>x.to).sort().pop(),days:Math.max(...l.map(x=>x.days))}})();
+  return `<article class="panel"><div class="panel-heading"><div><h3>Rendimento</h3><p class="muted">Ganho real das aplicações, sem contar o dinheiro que você colocou ou tirou. Registro desde ${formatDate(r.map(x=>x.first).filter(Boolean).sort()[0])}.</p></div></div>
+  <div class="metric-grid"><article class="metric"><span>Último período</span><strong class="${lastT.gain>=0?'positive':'negative'}">${lastT.gain>=0?'+':'−'} ${money(Math.abs(lastT.gain))}</strong><small>${pc(lastT.pct)} · até ${formatDate(lastT.to)}${lastT.days>1?' ('+lastT.days+' dias)':''}</small></article>
+  <article class="metric"><span>No mês</span><strong>${tot('month')?(tot('month').gain>=0?'+':'−')+' '+money(Math.abs(tot('month').gain)):'—'}</strong><small>${tot('month')?pc(tot('month').pct):'Sem dados no mês'}</small></article>
+  <article class="metric"><span>Últimos 30 dias</span><strong>${tot('d30')?(tot('d30').gain>=0?'+':'−')+' '+money(Math.abs(tot('d30').gain)):'—'}</strong><small>${tot('d30')?pc(tot('d30').pct):'—'}</small></article></div>
+  <div class="table-wrap"><table class="data-table"><thead><tr><th>Aplicação</th><th>Saldo</th><th>Último</th><th>No mês</th></tr></thead><tbody>${have.map(x=>`<tr><td>${esc(x.name.slice(0,48))}</td><td>${money(x.balance)}</td><td>${cell(x.last&&{gain:x.last.gain,pct:x.last.base?x.last.gain/x.last.base*100:0})}</td><td>${cell(x.month)}</td></tr>`).join('')}</tbody></table></div>
+  <p class="tiny muted">O banco informa o saldo uma vez por dia, então o rendimento diário vem da diferença entre um dia e o seguinte. Fundos de renda fixa podem variar um pouco de um dia para o outro.</p></article>`}
