@@ -153,31 +153,76 @@ async function syncFamily(sb, uid, displayName, family) {
         let path = `/v2/transactions?accountId=${encodeURIComponent(a.id)}&dateFrom=${from}&dateTo=${to}`;
         for (let guard = 0; path && guard < 40; guard++) {
           const res = await pluggyGet(path, key);
-          for (const t of res.results ?? []) { if (t.status === 'PENDING') pendingSkipped++; else if (Number(t.amount) !== 0) txs.push(t); }
+          for (const t of res.results ?? []) {
+            if (Number(t.amount) === 0) continue;
+            // Compras de cartão ainda não confirmadas (fatura aberta) entram como pendentes; em conta corrente, pendentes são ignorados.
+            if (t.status === 'PENDING') { if (a.type === 'CREDIT') { t._pending = true; txs.push(t); } else pendingSkipped++; } else txs.push(t);
+          }
           const next = res.next;
           path = next ? (String(next).startsWith('/') ? String(next) : `/v2/transactions${String(next).startsWith('?') ? '' : '?'}${next}`) : '';
         }
         fetchedTransactions += txs.length;
-        details.push(`${String(a.marketingName || a.name || 'conta').slice(0, 20)} [${a.subtype ?? a.type ?? '?'}${a.number ? ' ' + a.number : ''}] (saldo ${a.balance ?? '?'}): ${txs.length} lanç.${pendingSkipped ? ` (+${pendingSkipped} pendentes ignorados)` : ''}`);
+        details.push(`${String(a.marketingName || a.name || 'conta').slice(0, 20)} [${a.subtype ?? a.type ?? '?'}${a.number ? ' ' + a.number : ''}] (saldo ${a.balance ?? '?'}): ${txs.length} lanç.${txs.filter((x) => x._pending).length ? ` (${txs.filter((x) => x._pending).length} pendentes)` : ''}${pendingSkipped ? ` (+${pendingSkipped} pendentes ignorados)` : ''}`);
         if (!txs.length) continue;
 
         // Não reimporta o que já está na fila de revisão (pendente, aprovado ou ignorado).
-        const seen = new Set();
+        const seen = new Map();
         for (const ids of chunk(txs.map((t) => t.id), 100)) {
           const { data: ex, error: ee } = await sb
-            .from('bank_import_review').select('external_transaction_id')
+            .from('bank_import_review').select('external_transaction_id,bank_status')
             .eq('family_id', family).in('external_transaction_id', ids);
           if (ee) throw ee;
-          for (const x of ex ?? []) seen.add(x.external_transaction_id);
+          for (const x of ex ?? []) seen.set(x.external_transaction_id, x.bank_status);
+        }
+        const isCard = a.type === 'CREDIT';
+        const accId = idOf.get(a.id) ?? null;
+
+        // Cartão: compras que eram pendentes e agora foram confirmadas pelo banco (mesmo id ou id novo) viram "confirmadas" sem duplicar.
+        let candidates = [];
+        if (isCard && accId) {
+          const { data: cp } = await sb.from('bank_import_review')
+            .select('id,external_transaction_id,amount,transaction_date,description')
+            .eq('family_id', family).eq('account_id', accId).eq('bank_status', 'pending');
+          candidates = cp ?? [];
+        }
+        const key8 = (s) => norm(s).replace(/[^a-z0-9]/g, '').slice(0, 8);
+        for (const t of txs) {
+          if (t._pending || !isCard) continue;
+          if (seen.get(t.id) === 'pending') {
+            await sb.from('bank_import_review').update({ bank_status: 'posted' }).eq('family_id', family).eq('external_transaction_id', t.id);
+            candidates = candidates.filter((c) => c.external_transaction_id !== t.id);
+          }
+        }
+        const matched = new Set();
+        for (const t of txs) {
+          if (t._pending || !isCard || seen.has(t.id)) continue;
+          const amt = Math.abs(Number(t.amount)), d = brDate(t.date), k = key8(t.description || t.descriptionRaw);
+          const m = candidates.find((c) => Number(c.amount) === amt
+            && Math.abs(new Date(c.transaction_date).getTime() - new Date(d).getTime()) <= 6 * 864e5
+            && (key8(c.description) === k || norm(c.description).includes(k.slice(0, 6)) || norm(t.description || '').includes(key8(c.description).slice(0, 6))));
+          if (!m) continue;
+          candidates = candidates.filter((c) => c.id !== m.id);
+          matched.add(t.id);
+          await sb.from('bank_import_review').update({ external_transaction_id: t.id, bank_status: 'posted', transaction_date: d }).eq('id', m.id);
+          await sb.from('transactions').update({ external_transaction_id: t.id, occurred_on: d }).eq('family_id', family).eq('external_transaction_id', m.external_transaction_id);
+        }
+        // Pendentes que sumiram do banco e ainda não foram aprovadas (compra cancelada): remove da fila.
+        if (isCard && accId) {
+          const live = new Set(txs.map((x) => x.id));
+          for (const c of candidates) {
+            if (!live.has(c.external_transaction_id)) {
+              await sb.from('bank_import_review').delete().eq('id', c.id).eq('review_status', 'pending').eq('bank_status', 'pending');
+            }
+          }
         }
 
-        const isCard = a.type === 'CREDIT';
-        const rows = txs.filter((t) => !seen.has(t.id)).map((t) => {
+        const rows = txs.filter((t) => !seen.has(t.id) && !matched.has(t.id)).map((t) => {
           const credit = t.type === 'CREDIT';
           return {
             family_id: family,
-            account_id: idOf.get(a.id) ?? null,
+            account_id: accId,
             external_transaction_id: t.id,
+            bank_status: t._pending ? 'pending' : 'posted',
             description: String(t.description || t.descriptionRaw || 'Sem descrição').slice(0, 200),
             amount: Math.abs(Number(t.amount)),
             transaction_date: brDate(t.date),
@@ -297,7 +342,7 @@ Deno.serve(async (req) => {
           .eq('family_id', family).eq('active', true).order('role').limit(5);
         const owner = (m ?? []).find((x) => x.role === 'admin') ?? (m ?? [])[0];
         if (!owner) continue;
-        try { const r = await syncFamily(admin, owner.user_id, owner.display_name, family); out.push({ family, new_transactions: r.new_transactions, investments: r.investments, errors: r.errors }); }
+        try { const r = await syncFamily(admin, owner.user_id, owner.display_name, family); out.push({ family, new_transactions: r.new_transactions, investments: r.investments, errors: r.errors, details: r.details }); }
         catch (e) { out.push({ family, error: String(e?.message || e) }); }
       }
       return json({ cron: true, out });
