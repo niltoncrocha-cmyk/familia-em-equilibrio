@@ -138,7 +138,7 @@ $('syncBank').onclick=async()=>{const btn=$('syncBank');btn.disabled=true;btn.te
   $('syncResult').textContent=[`Última sincronização às ${when}: ${data.new_transactions} novos lançamentos para revisar; a Pluggy devolveu ${data.fetched_transactions} lançamentos em ${data.checked_accounts} contas.`,...(data.errors||[]).map(x=>'⚠ '+x),...(data.details||[]).map(x=>'• '+x)].join('\n');
   toast(`Sincronizado: ${data.new_transactions} novos lançamentos para revisar.`+(data.errors?.length?' Há avisos abaixo.':''))}catch(err){$('syncResult').textContent='⚠ '+err.message;toast(err.message)}finally{btn.textContent='Sincronizar agora';btn.disabled=!connections.length}};
 if(configured&&window.supabase){client=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);client.auth.getSession().then(({data})=>{if(data.session){session=data.session;boot()}else showAuth()});client.auth.onAuthStateChange((_event,s)=>{if(s){session=s;boot()}else showAuth()})}else showAuth();
-const APP_VERSION='25';
+const APP_VERSION='26';
 if('serviceWorker'in navigator){const hadController=!!navigator.serviceWorker.controller;let reloaded=false;
   navigator.serviceWorker.addEventListener('controllerchange',()=>{if(hadController&&!reloaded){reloaded=true;location.reload()}});
   window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(r=>r.update()).catch(()=>{}))}
@@ -389,3 +389,27 @@ function matrixHtml(agg,aggP,sel,prev,part){const ms=[];for(let i=5;i>=0;i--)ms.
   return `<article class="panel"><div class="panel-heading"><div><h3>Categoria por categoria</h3><p class="muted">${down} categoria(s) com gasto menor que no mês anterior${part?' (até o mesmo dia)':''}, ${up} com gasto maior. Redução somada: ${money(saved)}.</p></div></div>
   <div class="table-wrap"><table class="data-table"><thead><tr><th>Categoria</th>${ms.map(k=>`<th>${esc(MONTH_SHORT(k))}${k===sel&&part?'*':''}</th>`).join('')}<th>Variação</th></tr></thead><tbody>${rows}</tbody></table></div>
   <p class="tiny muted">▼ verde = reduziu, ▲ vermelho = aumentou, em relação ao mês anterior${part?'. *Mês em andamento: a variação compara com o mesmo período do mês passado.':'.'}</p></article>`}
+
+// Gerenciar categorias: renomear, mesclar com outra de mesmo nome e excluir (os lançamentos ficam sem categoria).
+let catManageOpen=false;
+function renderCatManage(){const box=$('catManage');if(!box)return;if(!catManageOpen){box.innerHTML='';return}
+  const own=categories.filter(c=>c.family_id),cnt=id=>history.filter(t=>t.category_id===id).length;
+  const row=c=>`<div class="tx-row" style="flex-wrap:wrap;gap:8px"><div style="flex:1;min-width:160px"><input class="cm-name" data-cat="${c.id}" value="${esc(c.name)}" maxlength="60" style="width:100%"><small>${c.kind==='income'?'Receita':'Despesa'} · ${cnt(c.id)} lançamento(s)</small></div><button class="secondary compact" type="button" data-cmdel="${c.id}">Excluir</button></div>`;
+  box.innerHTML=`<article class="panel"><div class="panel-heading"><div><h3>Categorias</h3><p class="muted">Troque o nome digitando e saindo do campo. Se o novo nome já existir, as duas são unidas. Ao excluir, os lançamentos ficam <b>sem categoria</b> (nenhum lançamento é apagado). Só o administrador pode alterar.</p></div></div>
+  <h4>Despesas</h4>${own.filter(c=>c.kind==='expense').map(row).join('')||'<p class="muted">Nenhuma.</p>'}<h4>Receitas</h4>${own.filter(c=>c.kind==='income').map(row).join('')||'<p class="muted">Nenhuma.</p>'}</article>`}
+async function catMove(fromId,toId){for(const [tb,col] of [['transactions','category_id'],['bank_import_review','final_category_id'],['budgets','category_id']]){
+    const{error}=await client.from(tb).update({[col]:toId}).eq(col,fromId);if(error&&!(tb==='budgets'&&!toId))throw error}}
+document.addEventListener('click',async e=>{const b=e.target.closest('#catManageBtn,[data-cmdel]');if(!b)return;
+  if(b.id==='catManageBtn'){catManageOpen=!catManageOpen;renderCatManage();return}
+  const c=categories.find(x=>x.id===b.dataset.cmdel);if(!c)return;
+  if(!confirm(`Excluir a categoria "${c.name}"? Os lançamentos dela ficam sem categoria e os orçamentos dessa categoria são removidos.`))return;
+  try{await client.from('budgets').delete().eq('category_id',c.id);await catMove(c.id,null);
+    const{error}=await client.from('categories').delete().eq('id',c.id);if(error)throw error;
+    toast('Categoria excluída.');await loadAll();renderCatManage()}catch(err){toast(err.code==='42501'?'Só o administrador pode excluir categorias.':'Não foi possível excluir: '+err.message)}});
+document.addEventListener('change',async e=>{const s=e.target;if(!s.matches?.('.cm-name'))return;const c=categories.find(x=>x.id===s.dataset.cat),name=s.value.trim();
+  if(!c||name===c.name)return;if(name.length<2){s.value=c.name;return toast('Digite um nome com pelo menos 2 letras.')}
+  try{const same=categories.find(x=>x.id!==c.id&&x.kind===c.kind&&x.name.toLowerCase()===name.toLowerCase()&&x.family_id);
+    if(same){if(!confirm(`Já existe "${same.name}". Unir "${c.name}" nela? Os lançamentos passam para "${same.name}".`)){s.value=c.name;return}
+      await client.from('budgets').delete().eq('category_id',c.id);await catMove(c.id,same.id);const{error}=await client.from('categories').delete().eq('id',c.id);if(error)throw error;toast('Categorias unidas.')}
+    else{const{error}=await client.from('categories').update({name}).eq('id',c.id);if(error)throw error;toast('Nome da categoria salvo.')}
+    await loadAll();renderCatManage()}catch(err){s.value=c.name;toast(err.code==='42501'?'Só o administrador pode alterar categorias.':'Não foi possível salvar: '+err.message)}});
