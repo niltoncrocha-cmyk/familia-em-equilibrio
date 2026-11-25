@@ -29,16 +29,18 @@ $('authForm').addEventListener('submit',async e=>{e.preventDefault();if(!configu
 $('signupBtn').onclick=async()=>{if(!configured){message('authMessage','Configure primeiro a URL e a chave pública do Supabase no app.js.');return}const {data,error}=await client.auth.signUp({email:$('authEmail').value,password:$('authPassword').value});if(error){message('authMessage',error.message);return}message('authMessage',data.session?'Acesso criado. Entre para continuar.':'Acesse seu e-mail para confirmar o cadastro e depois entre.');};
 async function boot(){showApp();$('sideUser').textContent=session.user.email;try{await loadFamily();await loadAll()}catch(e){toast('Não foi possível carregar os dados: '+e.message)}}
 async function loadFamily(){let {data,error}=await client.from('family_members').select('family_id,role,display_name').eq('user_id',session.user.id).eq('active',true).maybeSingle();if(error)throw error;if(!data){$('familyInfo').innerHTML='<p class="muted">Seu usuário ainda não está vinculado a uma família. Execute a função de configuração inicial descrita no README ou peça ao administrador para concluir o cadastro.</p>';return}family=data.family_id;}
+// Busca em páginas de 1.000 linhas (o servidor limita cada resposta), até 10.000 lançamentos.
+async function pageAll(q){const out=[];for(let from=0;from<10000;from+=1000){const{data,error}=await q().range(from,from+999);if(error)return{data:out,error};out.push(...(data||[]));if(!data||data.length<1000)break}return{data:out,error:null}}
 async function loadAll(){if(!family){renderFamily();return}const [m,c,a,t,b,cn,rv,al,hs,iv]=await Promise.all([
  client.from('family_members').select('user_id,display_name,role').eq('family_id',family).eq('active',true),
  client.from('categories').select('*').or(`family_id.eq.${family},family_id.is.null`).order('name'),
  client.from('financial_accounts').select('*').eq('family_id',family).eq('active',true).order('name'),
- client.from('transactions').select('*,categories!transactions_category_id_fkey(name,kind),family_members!transactions_family_member_fkey(display_name),financial_accounts!transactions_account_id_fkey(name)').eq('family_id',family).order('occurred_on',{ascending:false}).limit(500),
+ pageAll(()=>client.from('transactions').select('*,categories!transactions_category_id_fkey(name,kind),family_members!transactions_family_member_fkey(display_name),financial_accounts!transactions_account_id_fkey(name)').eq('family_id',family).order('occurred_on',{ascending:false}).order('id')),
  client.from('budgets').select('*,categories(name)').eq('family_id',family).eq('month',month()+'-01'),
  client.from('bank_connections').select('id,institution,last_synced_at').eq('family_id',family).order('created_at'),
  client.from('bank_import_review').select('*').eq('family_id',family).eq('review_status','pending').order('transaction_date',{ascending:false}).limit(200),
  client.from('family_aliases').select('id,name').eq('family_id',family).order('name'),
- client.from('transactions').select('id,account_id,description,counterparty,amount,type,category_id,movement_kind,occurred_on,source').eq('family_id',family).order('occurred_on',{ascending:false}).limit(3000),
+ pageAll(()=>client.from('transactions').select('id,account_id,description,counterparty,amount,type,category_id,movement_kind,occurred_on,source').eq('family_id',family).order('occurred_on',{ascending:false}).order('id')),
  client.from('investments').select('*').eq('family_id',family).order('balance',{ascending:false})
  ]);for(const r of [m,c,a,t,b])if(r.error)throw r.error;members=m.data||[];categories=c.data||[];accounts=a.data||[];transactions=t.data||[];budgets=b.data||[];connections=cn.error?[]:(cn.data||[]);reviews=rv.error?[]:(rv.data||[]);aliases=al.error?[]:(al.data||[]);history=hs.error?[]:(hs.data||[]);investments=iv.error?[]:(iv.data||[]);renderAll()}
 function renderAll(){snapshotInvestments();autoSync();renderMonths();renderWealth();renderInvestments();renderAliases();renderDashboard();renderTransactions();renderAccounts();renderBudgets();renderFamily();fillCategories();renderBank()}
@@ -138,7 +140,7 @@ $('syncBank').onclick=async()=>{const btn=$('syncBank');btn.disabled=true;btn.te
   $('syncResult').textContent=[`Última sincronização às ${when}: ${data.new_transactions} novos lançamentos para revisar; a Pluggy devolveu ${data.fetched_transactions} lançamentos em ${data.checked_accounts} contas.`,...(data.errors||[]).map(x=>'⚠ '+x),...(data.details||[]).map(x=>'• '+x)].join('\n');
   toast(`Sincronizado: ${data.new_transactions} novos lançamentos para revisar.`+(data.errors?.length?' Há avisos abaixo.':''))}catch(err){$('syncResult').textContent='⚠ '+err.message;toast(err.message)}finally{btn.textContent='Sincronizar agora';btn.disabled=!connections.length}};
 if(configured&&window.supabase){client=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);client.auth.getSession().then(({data})=>{if(data.session){session=data.session;boot()}else showAuth()});client.auth.onAuthStateChange((_event,s)=>{if(s){session=s;boot()}else showAuth()})}else showAuth();
-const APP_VERSION='27';
+const APP_VERSION='28';
 if('serviceWorker'in navigator){const hadController=!!navigator.serviceWorker.controller;let reloaded=false;
   navigator.serviceWorker.addEventListener('controllerchange',()=>{if(hadController&&!reloaded){reloaded=true;location.reload()}});
   window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(r=>r.update()).catch(()=>{}))}
@@ -279,7 +281,7 @@ function renderMonths(){const box=$('monthsContent');if(!box)return;
   <article class="panel"><div class="panel-heading"><div><h3>Categorias: ${esc(MONTH_SHORT(sel))} × ${esc(MONTH_SHORT(prev))}${sameTxt}</h3><p class="muted">Vermelho: gastou mais que no mês anterior. Verde: gastou menos.</p></div></div>${cats.length?`<div class="table-wrap"><table class="data-table"><thead><tr><th>Categoria</th><th>${esc(MONTH_SHORT(sel))}</th><th>${esc(MONTH_SHORT(prev))}</th><th>Diferença</th></tr></thead><tbody>${catRows}</tbody></table></div>`:'<div class="empty-state">Sem despesas nesses meses.</div>'}</article>
   ${matrixHtml(agg,aggP,sel,prev,part)}
   <article class="panel"><div class="panel-heading"><div><h3>Maiores despesas do mês</h3></div></div>${top||'<div class="empty-state">Nenhuma despesa neste mês.</div>'}</article>
-  <p class="tiny muted">Não entram: transferências entre contas da família, pagamentos de fatura e aplicações/resgates. Doações contam como despesa.${history.length>=3000?' O histórico considera os últimos 3.000 lançamentos.':''}</p>`}
+  <p class="tiny muted">Não entram: transferências entre contas da família, pagamentos de fatura e aplicações/resgates. Doações contam como despesa.${history.length>=3000?' ':''}</p>`}
 $('monthsContent').addEventListener('click',e=>{const b=e.target.closest('[data-m]');if(!b||b.disabled)return;monthsSel=b.dataset.m;renderMonths();window.scrollTo({top:0})});
 $('monthsContent').addEventListener('change',e=>{if(e.target.id==='monthsPick'&&e.target.value){monthsSel=e.target.value;renderMonths()}});
 
