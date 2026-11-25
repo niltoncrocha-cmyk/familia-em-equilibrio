@@ -138,7 +138,7 @@ $('syncBank').onclick=async()=>{const btn=$('syncBank');btn.disabled=true;btn.te
   $('syncResult').textContent=[`Última sincronização às ${when}: ${data.new_transactions} novos lançamentos para revisar; a Pluggy devolveu ${data.fetched_transactions} lançamentos em ${data.checked_accounts} contas.`,...(data.errors||[]).map(x=>'⚠ '+x),...(data.details||[]).map(x=>'• '+x)].join('\n');
   toast(`Sincronizado: ${data.new_transactions} novos lançamentos para revisar.`+(data.errors?.length?' Há avisos abaixo.':''))}catch(err){$('syncResult').textContent='⚠ '+err.message;toast(err.message)}finally{btn.textContent='Sincronizar agora';btn.disabled=!connections.length}};
 if(configured&&window.supabase){client=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);client.auth.getSession().then(({data})=>{if(data.session){session=data.session;boot()}else showAuth()});client.auth.onAuthStateChange((_event,s)=>{if(s){session=s;boot()}else showAuth()})}else showAuth();
-const APP_VERSION='26';
+const APP_VERSION='27';
 if('serviceWorker'in navigator){const hadController=!!navigator.serviceWorker.controller;let reloaded=false;
   navigator.serviceWorker.addEventListener('controllerchange',()=>{if(hadController&&!reloaded){reloaded=true;location.reload()}});
   window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(r=>r.update()).catch(()=>{}))}
@@ -208,6 +208,7 @@ function renderInvestments(){const box=$('investmentsContent');if(!box)return;
   const last=investments.map(i=>i.updated_at).sort().pop();
   const metric=(t,v,s)=>`<article class="metric"><span>${t}</span><strong>${v}</strong><small>${s}</small></article>`;
   let html=`<div class="metric-grid">${metric('Investimentos',money(total),investments.length+' aplicações')}${metric('Saldo em contas',money(bank),'Contas bancárias conectadas')}${metric('Cartões em aberto',money(cards),'Valor usado nos cartões')}${metric('Rentabilidade',investments.some(i=>i.profit!=null)?money(profit):'—',invested?`sobre ${money(invested)} aplicados`:'Quando o banco informar')}</div>`;
+  html+=openCardsHtml();
   if(!investments.length){html+='<div class="panel empty-state">Nenhum investimento encontrado. Toque em <strong>Sincronizar agora</strong> em Contas e cartões. Se continuar vazio, o banco pode não estar compartilhando investimentos no Open Finance: confira as permissões da conexão no MeuPluggy.</div>';box.innerHTML=html;return}
   const groups={};investments.forEach(i=>{const k=i.type||'OTHER';(groups[k]=groups[k]||[]).push(i)});
   html+=Object.entries(groups).sort((x,y)=>sum(y[1],i=>i.balance)-sum(x[1],i=>i.balance)).map(([k,list])=>{const sub=sum(list,i=>i.balance);
@@ -413,3 +414,17 @@ document.addEventListener('change',async e=>{const s=e.target;if(!s.matches?.('.
       await client.from('budgets').delete().eq('category_id',c.id);await catMove(c.id,same.id);const{error}=await client.from('categories').delete().eq('id',c.id);if(error)throw error;toast('Categorias unidas.')}
     else{const{error}=await client.from('categories').update({name}).eq('id',c.id);if(error)throw error;toast('Nome da categoria salvo.')}
     await loadAll();renderCatManage()}catch(err){s.value=c.name;toast(err.code==='42501'?'Só o administrador pode alterar categorias.':'Não foi possível salvar: '+err.message)}});
+
+// Lista do que compõe o valor em aberto dos cartões: compras mais recentes primeiro, até chegar no saldo informado pelo banco.
+function openCardsHtml(){const cards=accounts.filter(x=>x.account_type==='credit_card'&&x.balance!=null&&Number(x.balance)>0);if(!cards.length)return '';
+  const groups={};for(const c of cards){const k=c.credit_limit?c.credit_limit+'|'+c.balance:c.id;(groups[k]=groups[k]||[]).push(c)}
+  const blocks=Object.values(groups).map(g=>{const ids=new Set(g.map(c=>c.id)),B=Number(g[0].balance),nameOf=id=>accounts.find(x=>x.id===id)?.name||'Cartão';
+    const items=[...history.filter(t=>ids.has(t.account_id)&&t.type==='expense'&&['normal','donation'].includes(t.movement_kind||'normal')).map(t=>({d:String(t.occurred_on),desc:t.description,v:Number(t.amount),acc:t.account_id,st:'ok'})),
+      ...reviews.filter(r=>ids.has(r.account_id)&&r.suggested_type!=='income'&&r.suggested_movement!=='card_bill'&&autoKind(r)!=='card_bill').map(r=>({d:String(r.transaction_date),desc:r.description,v:Number(r.amount),acc:r.account_id,st:'wait'}))]
+      .sort((x,y)=>y.d.localeCompare(x.d));
+    let acc=0;const shown=[];for(const it of items){if(acc>=B-0.005)break;shown.push(it);acc+=it.v}
+    const diff=B-acc,due=g[0].due_day?'vence dia '+g[0].due_day:'',limit=g[0].credit_limit?`limite ${money(g[0].credit_limit)}`:'';
+    return `<article class="panel"><div class="panel-heading"><div><h3>${g.map(c=>esc(c.name.replace(/ ••••.*/,'')+' '+(c.name.match(/••••\s*\d+/)||[''])[0])).join(' + ')}</h3><p class="muted">Em aberto: <b>${money(B)}</b>${due?' · '+due:''}${limit?' · '+limit:''}${g.length>1?' · limite compartilhado, valor contado uma vez':''}</p></div></div>
+    ${shown.length?shown.map(it=>`<div class="tx-row"><div><strong>${esc(it.desc)}</strong><small>${formatDate(it.d)}${g.length>1?' · '+esc(nameOf(it.acc).match(/••••\s*\d+/)?.[0]||''):''}${it.st==='wait'?' · aguardando sua classificação':''}</small></div><strong class="negative">${money(it.v)}</strong></div>`).join(''):'<div class="empty-state">O banco ainda não detalhou as compras deste cartão.</div>'}
+    <p class="tiny muted">Compras listadas: ${money(acc)}${diff>0.01?` · Sem detalhe do banco: ${money(diff)} (fatura fechada, parcelas ou compras ainda não enviadas)`:''}</p></article>`});
+  return `<h3 style="margin:16px 0 8px">Cartões de crédito em aberto</h3>`+blocks.join('')}
